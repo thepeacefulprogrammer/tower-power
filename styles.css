@@ -28,6 +28,7 @@ body {
 	--crop-right: 0px;
 	--crop-bottom: 0px;
 	--crop-left: 0px;
+	--effective-mask-left: var(--crop-left);
 	--locked-width: 100px;
 	--locked-height: 100px;
 	--scale: 1;
@@ -41,32 +42,110 @@ body {
 	height: var(--locked-height);
 	transform: translate(-50%, -50%) scale(var(--scale));
 	transform-origin: center;
-}
-
-.pane-frame {
-	position: absolute;
-	inset: 0;
-	margin: auto;
-	overflow: hidden;
-	width: max(
-		0px,
-		calc(var(--locked-width) - var(--crop-left) - var(--crop-right))
-	);
-	height: max(
-		0px,
-		calc(var(--locked-height) - var(--crop-top) - var(--crop-bottom))
-	);
 	background: #000;
 }
 
 iframe {
 	position: absolute;
-	top: calc(-1 * var(--crop-top));
-	left: calc(-1 * var(--crop-left));
+	inset: 0;
 	width: var(--locked-width);
 	height: var(--locked-height);
 	border: 0;
 	background: #000;
+}
+
+.pane-mask {
+	position: absolute;
+	background: #000;
+	pointer-events: none;
+}
+
+.pane-mask-top {
+	top: 0;
+	left: 0;
+	right: 0;
+	height: var(--crop-top);
+}
+
+.pane-mask-right {
+	top: 0;
+	right: 0;
+	bottom: 0;
+	width: var(--crop-right);
+}
+
+.pane-mask-bottom {
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: var(--crop-bottom);
+}
+
+.pane-mask-left {
+	top: 0;
+	left: 0;
+	bottom: 0;
+	width: var(--effective-mask-left);
+}
+
+.pane-controls {
+	position: absolute;
+	z-index: 2;
+	top: 16px;
+	left: 16px;
+}
+
+.pane-menu-toggle {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 42px;
+	height: 42px;
+	padding: 0;
+	border: 1px solid rgba(255, 255, 255, 0.22);
+	border-radius: 999px;
+	background: rgba(0, 0, 0, 0.68);
+	color: #fff;
+	font: 700 22px / 1 sans-serif;
+	cursor: pointer;
+	backdrop-filter: blur(8px);
+}
+
+.pane-menu-toggle[aria-expanded="true"] {
+	background: rgba(70, 70, 70, 0.88);
+	border-color: rgba(255, 255, 255, 0.45);
+}
+
+.pane-action-menu {
+	margin-top: 8px;
+	min-width: 170px;
+	padding: 8px;
+	border: 1px solid rgba(255, 255, 255, 0.16);
+	border-radius: 14px;
+	background: rgba(0, 0, 0, 0.82);
+	backdrop-filter: blur(10px);
+	box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+.pane-action-button {
+	width: 100%;
+	padding: 10px 12px;
+	border: 0;
+	border-radius: 10px;
+	background: rgba(255, 255, 255, 0.08);
+	color: #fff;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.pane-action-button:hover {
+	background: rgba(255, 255, 255, 0.14);
+}
+
+.pane-action-button:disabled {
+	opacity: 0.6;
+	cursor: progress;
 }
 
 @media (max-width: 980px) {

@@ -10,6 +10,7 @@ LOG_FILE="$ROOT_DIR/.dev-server.log"
 CONFIG_JS_FILE="$ROOT_DIR/config.js"
 CONFIG_JS_EXAMPLE_FILE="$ROOT_DIR/config.js.example"
 SERVER_SCRIPT="$ROOT_DIR/dev_server.py"
+EDGE_DEBUG_SCRIPT="$ROOT_DIR/scripts/towerpower-edge-debug.ps1"
 
 if ! command -v python3 >/dev/null 2>&1; then
 	echo "Error: python3 is required to serve this app." >&2
@@ -93,7 +94,10 @@ if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
 fi
 
 if [[ "${NO_BROWSER:-0}" != "1" ]]; then
-	if command -v xdg-open >/dev/null 2>&1; then
+	if [[ -n "${WSL_DISTRO_NAME:-}" ]] && command -v powershell.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
+		EDGE_DEBUG_SCRIPT_WIN="$(wslpath -w "$EDGE_DEBUG_SCRIPT")"
+		powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$EDGE_DEBUG_SCRIPT_WIN" -Mode reset >/dev/null 2>&1 || true
+	elif command -v xdg-open >/dev/null 2>&1; then
 		xdg-open "$URL" >/dev/null 2>&1 || true
 	elif command -v open >/dev/null 2>&1; then
 		open "$URL" >/dev/null 2>&1 || true

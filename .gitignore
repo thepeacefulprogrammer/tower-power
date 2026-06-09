@@ -1,5 +1,6 @@
 config.js
 .dev-server.pid
 .dev-server.log
+node_modules/
 __pycache__/
 *.pyc

@@ -1,0 +1,10 @@
+{
+  "name": "tower-power",
+  "private": true,
+  "scripts": {
+    "automate": "node automation.js"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.60.0"
+  }
+}

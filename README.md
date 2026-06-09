@@ -26,6 +26,23 @@ window.TOWER_POWER_CONFIG = {
   DEVICE_B_CROP_RIGHT: 0,
   DEVICE_B_CROP_BOTTOM: 0,
   DEVICE_B_CROP_LEFT: 0,
+
+  AUTOMATION: {
+    paneA: {
+      menuButton: null,
+      actions: {
+        resolution1080p: null,
+        resolution720p: null,
+      },
+    },
+    paneB: {
+      menuButton: null,
+      actions: {
+        resolution1080p: null,
+        resolution720p: null,
+      },
+    },
+  },
 };
 ```
 
@@ -38,20 +55,29 @@ https://www.ldcloud.net/web/webRtcNew?deviceId=1234567&type=my
 
 The `deviceId` is the number after `deviceId=`.
 
-The optional `*_CROP_*` values are pixel offsets that visually trim the iframe:
+The optional `*_CROP_*` values are pixel offsets that visually mask parts of the iframe:
 
 - `*_CROP_TOP` hides pixels from the top
 - `*_CROP_RIGHT` hides pixels from the right
 - `*_CROP_BOTTOM` hides pixels from the bottom
 - `*_CROP_LEFT` hides pixels from the left
 
-The remaining visible area is centered inside each pane, so increasing left crop will not push the visible screen sideways across the panel.
+These values no longer resize or shift the iframe. The full iframe stays in place and black masks are drawn over the unwanted edges, which keeps internal click coordinates stable for browser automation.
 
 Each pane also locks to its initial on-load size and then scales as a whole if the browser window moves to a different monitor or changes size. That keeps your crop offsets stable instead of retuning them for every display width.
 
 Start with `0` and increase the values until only the device screen is visible.
 
-Important: this is a visual crop only. The LD Cloud UI is still loaded inside the iframe, but because it is cross-origin, this page cannot directly script or click hidden LD Cloud controls from this wrapper page.
+Important: this is a visual mask only. The LD Cloud UI is still loaded inside the iframe, and the masked regions can still receive browser-level clicks. However, because the iframe is cross-origin, this page still cannot directly script or call `.click()` on hidden LD Cloud controls from wrapper-page JavaScript.
+
+For automation helpers:
+- `window.TowerPowerDebug.getPaneClientPoint(viewportId, { x, y })` returns a browser client coordinate for a point inside a locked pane stage.
+- `window.TowerPowerDebug.setPaneMenuReveal(viewportId, true | false)` forces the left mask to show or hide if you need manual debugging.
+- `window.TowerPowerDebug.togglePaneMenuReveal(viewportId)` toggles that reveal state.
+
+`AUTOMATION.paneA` and `AUTOMATION.paneB` are optional local coordinate maps for the browser automation script. Store `menuButton` and any menu item coordinates there after calibration.
+
+Example viewport IDs are `pane-a-viewport` and `pane-b-viewport`.
 
 If `config.js` is missing, `dev.sh` creates it from `config.js.example` and asks you to fill in your device IDs.
 
@@ -66,6 +92,7 @@ By default it:
 - serves the app at `http://127.0.0.1:8080`
 - stops anything already listening on that port
 - starts the server in the background and returns control to your console
+- on WSL, opens the app in the same Windows Edge debug window used by pane automation
 - serves files with no-cache headers for dev use
 - watches `config.js` from the browser and reapplies changes about once per second without requiring a page reload
 
@@ -82,12 +109,44 @@ Runtime files:
 - `.dev-server.log`
 - `config.js`
 
+## Browser automation
+
+Install the single local dependency:
+
+```bash
+npm install
+```
+
+Commands:
+
+```bash
+npm run automate -- capture pane-a
+npm run automate -- capture pane-b
+npm run automate -- reveal pane-a on
+npm run automate -- click pane-a 12 420 --reveal
+npm run automate -- open-menu pane-a
+npm run automate -- action pane-b actions.resolution1080p
+```
+
+Notes:
+
+- `capture` is available from the Playwright CLI if you need to recalibrate coordinates later.
+- `open-menu` uses `AUTOMATION.paneA.menuButton` or `AUTOMATION.paneB.menuButton` from `config.js`.
+- `action` uses `AUTOMATION.paneA.actions.*` or `AUTOMATION.paneB.actions.*` from `config.js`.
+- Set `BROWSER_PROFILE_DIR=/path/to/chromium-profile` if you want Playwright to launch its own Chromium-family browser profile.
+- For Windows Edge from WSL, launching the `.exe` directly may fail. In that case start Edge yourself with a remote debugging port and use `BROWSER_CDP_URL=http://127.0.0.1:9222` instead.
+- If the automated browser shows LD Cloud login pages, authenticate in that browser/profile first.
+
 ## Files
 
 - `index.html` — two iframe panes only
-- `styles.css` — full-screen two-pane layout with centered clipped viewports
-- `app.js` — loads the configured device IDs, locks pane size on first load, and reapplies live crop offsets into the panes
-- `config.js.example` — example config with placeholder device IDs and crop settings
+- `styles.css` — full-screen two-pane layout with fixed-size masked stages and pane action menus
+- `app.js` — loads the configured device IDs, locks pane size on first load, reapplies live mask offsets, triggers pane automation, and exposes coordinate helpers for automation
+- `config.js.example` — example config with placeholder device IDs, crop settings, and automation coordinate slots
 - `config.js` — your local device IDs and crop settings, ignored by git
-- `dev.sh` — starts the local dev server
-- `dev_server.py` — no-cache static server for local development
+- `dev.sh` — starts the local dev server and, on WSL, opens the shared Edge debug window
+- `dev_server.py` — no-cache static server plus current-tab automation endpoint
+- `automation.js` — Playwright-based pane automation for capture, reveal, and coordinate clicks
+- `scripts/towerpower-edge-debug.ps1` — Windows Edge launcher/reuse script for the visible debug window
+- `scripts/towerpower-cdp-click.ps1` — Windows CDP click helper for current-tab menu automation
+- `package.json` — local automation dependency and npm script

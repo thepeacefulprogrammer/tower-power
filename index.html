@@ -8,30 +8,74 @@
   </head>
   <body>
     <main class="pane-grid">
-      <section class="pane-viewport" id="pane-a-viewport">
-        <div class="pane-stage">
-          <div class="pane-frame">
-            <iframe
-              id="device-a"
-              title="LD Cloud device A"
-              allow="clipboard-read; clipboard-write; fullscreen"
-              loading="eager"
-              referrerpolicy="strict-origin-when-cross-origin"
-            ></iframe>
+      <section class="pane-viewport" id="pane-a-viewport" data-pane="pane-a">
+        <div class="pane-controls">
+          <button
+            class="pane-menu-toggle"
+            id="pane-a-menu-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-label="Pane A actions"
+          >
+            ☰
+          </button>
+          <div class="pane-action-menu" id="pane-a-action-menu" hidden>
+            <button
+              class="pane-action-button"
+              type="button"
+              data-automation-action="menuButton"
+            >
+              Open menu
+            </button>
           </div>
         </div>
-      </section>
-      <section class="pane-viewport" id="pane-b-viewport">
         <div class="pane-stage">
-          <div class="pane-frame">
-            <iframe
-              id="device-b"
-              title="LD Cloud device B"
-              allow="clipboard-read; clipboard-write; fullscreen"
-              loading="eager"
-              referrerpolicy="strict-origin-when-cross-origin"
-            ></iframe>
+          <iframe
+            id="device-a"
+            title="LD Cloud device A"
+            allow="clipboard-read; clipboard-write; fullscreen"
+            loading="eager"
+            referrerpolicy="strict-origin-when-cross-origin"
+          ></iframe>
+          <div class="pane-mask pane-mask-top"></div>
+          <div class="pane-mask pane-mask-right"></div>
+          <div class="pane-mask pane-mask-bottom"></div>
+          <div class="pane-mask pane-mask-left"></div>
+        </div>
+      </section>
+      <section class="pane-viewport" id="pane-b-viewport" data-pane="pane-b">
+        <div class="pane-controls">
+          <button
+            class="pane-menu-toggle"
+            id="pane-b-menu-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-label="Pane B actions"
+          >
+            ☰
+          </button>
+          <div class="pane-action-menu" id="pane-b-action-menu" hidden>
+            <button
+              class="pane-action-button"
+              type="button"
+              data-automation-action="menuButton"
+            >
+              Open menu
+            </button>
           </div>
+        </div>
+        <div class="pane-stage">
+          <iframe
+            id="device-b"
+            title="LD Cloud device B"
+            allow="clipboard-read; clipboard-write; fullscreen"
+            loading="eager"
+            referrerpolicy="strict-origin-when-cross-origin"
+          ></iframe>
+          <div class="pane-mask pane-mask-top"></div>
+          <div class="pane-mask pane-mask-right"></div>
+          <div class="pane-mask pane-mask-bottom"></div>
+          <div class="pane-mask pane-mask-left"></div>
         </div>
       </section>
     </main>
