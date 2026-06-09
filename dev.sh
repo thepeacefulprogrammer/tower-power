@@ -7,8 +7,9 @@ HOST="${HOST:-127.0.0.1}"
 URL="http://${HOST}:${PORT}"
 PID_FILE="$ROOT_DIR/.dev-server.pid"
 LOG_FILE="$ROOT_DIR/.dev-server.log"
-CONFIG_FILE="$ROOT_DIR/config.toml"
 CONFIG_JS_FILE="$ROOT_DIR/config.js"
+CONFIG_JS_EXAMPLE_FILE="$ROOT_DIR/config.js.example"
+SERVER_SCRIPT="$ROOT_DIR/dev_server.py"
 
 if ! command -v python3 >/dev/null 2>&1; then
 	echo "Error: python3 is required to serve this app." >&2
@@ -58,78 +59,30 @@ free_port() {
 	fi
 }
 
-trim() {
-	local value="$1"
-	value="${value#${value%%[![:space:]]*}}"
-	value="${value%${value##*[![:space:]]}}"
-	printf '%s' "$value"
-}
-
-read_config_value() {
-	local key="$1"
-	local raw
-
-	raw="$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$CONFIG_FILE" | tail -n 1 || true)"
-	raw="${raw#*=}"
-	raw="${raw%%#*}"
-	raw="$(trim "$raw")"
-	raw="${raw%\"}"
-	raw="${raw#\"}"
-	raw="${raw%\'}"
-	raw="${raw#\'}"
-	printf '%s' "$raw"
-}
-
-ensure_config_file() {
-	if [[ -f "$CONFIG_FILE" ]]; then
+ensure_config_js() {
+	if [[ -f "$CONFIG_JS_FILE" ]]; then
 		return 0
 	fi
 
-	if [[ ! -f "$ROOT_DIR/config.toml.example" ]]; then
-		echo "Error: missing $CONFIG_FILE and config.toml.example" >&2
+	if [[ ! -f "$CONFIG_JS_EXAMPLE_FILE" ]]; then
+		echo "Error: missing $CONFIG_JS_FILE and $CONFIG_JS_EXAMPLE_FILE" >&2
 		exit 1
 	fi
 
-	cp "$ROOT_DIR/config.toml.example" "$CONFIG_FILE"
-	echo "Created $CONFIG_FILE from config.toml.example"
-	echo "Edit config.toml with your LD Cloud device IDs, then run ./dev.sh again."
+	cp "$CONFIG_JS_EXAMPLE_FILE" "$CONFIG_JS_FILE"
+	echo "Created $CONFIG_JS_FILE from config.js.example"
+	echo "Edit config.js with your LD Cloud device IDs, then run ./dev.sh again."
 	exit 0
 }
 
-generate_config_js() {
-	ensure_config_file
-
-	local device_a device_b
-	device_a="$(read_config_value DEVICE_A)"
-	device_b="$(read_config_value DEVICE_B)"
-
-	if [[ -z "$device_a" || -z "$device_b" ]]; then
-		echo "Error: config.toml must define DEVICE_A and DEVICE_B" >&2
-		exit 1
-	fi
-
-	if [[ "$device_a" == YOUR_* || "$device_b" == YOUR_* ]]; then
-		echo "Error: config.toml still contains placeholder values. Update DEVICE_A and DEVICE_B, then run ./dev.sh again." >&2
-		exit 1
-	fi
-
-	cat >"$CONFIG_JS_FILE" <<EOF
-window.TOWER_POWER_CONFIG = {
-  DEVICE_A: "${device_a}",
-  DEVICE_B: "${device_b}",
-};
-EOF
-}
-
 cd "$ROOT_DIR"
-generate_config_js
+ensure_config_js
 free_port
 
 echo "Starting Tower Power at ${URL}"
-nohup python3 -m http.server "$PORT" --bind "$HOST" >"$LOG_FILE" 2>&1 &
+nohup python3 "$SERVER_SCRIPT" "$HOST" "$PORT" >"$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 echo "$SERVER_PID" >"$PID_FILE"
-disown "$SERVER_PID" 2>/dev/null || true
 
 sleep 1
 
@@ -151,3 +104,4 @@ echo "Serving ${ROOT_DIR}"
 echo "URL: $URL"
 echo "PID: $SERVER_PID"
 echo "Log: $LOG_FILE"
+echo "Edit config.js to update crop values live."

@@ -8,20 +8,32 @@
   </head>
   <body>
     <main class="pane-grid">
-      <iframe
-        id="device-a"
-        title="LD Cloud device A"
-        allow="clipboard-read; clipboard-write; fullscreen"
-        loading="eager"
-        referrerpolicy="strict-origin-when-cross-origin"
-      ></iframe>
-      <iframe
-        id="device-b"
-        title="LD Cloud device B"
-        allow="clipboard-read; clipboard-write; fullscreen"
-        loading="eager"
-        referrerpolicy="strict-origin-when-cross-origin"
-      ></iframe>
+      <section class="pane-viewport" id="pane-a-viewport">
+        <div class="pane-stage">
+          <div class="pane-frame">
+            <iframe
+              id="device-a"
+              title="LD Cloud device A"
+              allow="clipboard-read; clipboard-write; fullscreen"
+              loading="eager"
+              referrerpolicy="strict-origin-when-cross-origin"
+            ></iframe>
+          </div>
+        </div>
+      </section>
+      <section class="pane-viewport" id="pane-b-viewport">
+        <div class="pane-stage">
+          <div class="pane-frame">
+            <iframe
+              id="device-b"
+              title="LD Cloud device B"
+              allow="clipboard-read; clipboard-write; fullscreen"
+              loading="eager"
+              referrerpolicy="strict-origin-when-cross-origin"
+            ></iframe>
+          </div>
+        </div>
+      </section>
     </main>
 
     <script src="./config.js"></script>

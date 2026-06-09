@@ -6,6 +6,10 @@ body {
 	background: #000;
 }
 
+body {
+	overflow: hidden;
+}
+
 .pane-grid {
 	display: grid;
 	width: 100vw;
@@ -14,9 +18,53 @@ body {
 	gap: 0;
 }
 
-iframe {
+.pane-viewport {
+	position: relative;
+	overflow: hidden;
 	width: 100%;
 	height: 100%;
+	background: #000;
+	--crop-top: 0px;
+	--crop-right: 0px;
+	--crop-bottom: 0px;
+	--crop-left: 0px;
+	--locked-width: 100px;
+	--locked-height: 100px;
+	--scale: 1;
+}
+
+.pane-stage {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	width: var(--locked-width);
+	height: var(--locked-height);
+	transform: translate(-50%, -50%) scale(var(--scale));
+	transform-origin: center;
+}
+
+.pane-frame {
+	position: absolute;
+	inset: 0;
+	margin: auto;
+	overflow: hidden;
+	width: max(
+		0px,
+		calc(var(--locked-width) - var(--crop-left) - var(--crop-right))
+	);
+	height: max(
+		0px,
+		calc(var(--locked-height) - var(--crop-top) - var(--crop-bottom))
+	);
+	background: #000;
+}
+
+iframe {
+	position: absolute;
+	top: calc(-1 * var(--crop-top));
+	left: calc(-1 * var(--crop-left));
+	width: var(--locked-width);
+	height: var(--locked-height);
 	border: 0;
 	background: #000;
 }
