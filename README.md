@@ -30,6 +30,7 @@ window.TOWER_POWER_CONFIG = {
   AUTOMATION: {
     paneA: {
       menuButton: null,
+      closeMenu: null,
       actions: {
         resolution1080p: null,
         resolution720p: null,
@@ -37,11 +38,22 @@ window.TOWER_POWER_CONFIG = {
     },
     paneB: {
       menuButton: null,
+      closeMenu: null,
       actions: {
         resolution1080p: null,
         resolution720p: null,
       },
     },
+  },
+
+  STARTUP_AUTOMATION: {
+    enabled: false,
+    initialDelayMs: 6000,
+    betweenActionsMs: 1500,
+    actions: [
+      { pane: "pane-a", action: "actions.resolution1080p" },
+      { pane: "pane-b", action: "actions.resolution1080p" },
+    ],
   },
 };
 ```
@@ -75,7 +87,9 @@ For automation helpers:
 - `window.TowerPowerDebug.setPaneMenuReveal(viewportId, true | false)` forces the left mask to show or hide if you need manual debugging.
 - `window.TowerPowerDebug.togglePaneMenuReveal(viewportId)` toggles that reveal state.
 
-`AUTOMATION.paneA` and `AUTOMATION.paneB` are optional local coordinate maps for the browser automation script. Store `menuButton` and any menu item coordinates there after calibration.
+`AUTOMATION.paneA` and `AUTOMATION.paneB` are optional local coordinate maps for the browser automation script. Store `menuButton`, `closeMenu`, and any menu item coordinates there after calibration.
+
+`STARTUP_AUTOMATION` is optional. When enabled, the page will trigger the listed pane actions once after load using the current visible Edge tab.
 
 Example viewport IDs are `pane-a-viewport` and `pane-b-viewport`.
 
@@ -133,6 +147,7 @@ Notes:
 - `capture` is available from the Playwright CLI if you need to recalibrate coordinates later.
 - `open-menu` uses `AUTOMATION.paneA.menuButton` or `AUTOMATION.paneB.menuButton` from `config.js`.
 - `action` uses `AUTOMATION.paneA.actions.*` or `AUTOMATION.paneB.actions.*` from `config.js`.
+- current-tab action sequences also need `closeMenu` for that pane.
 - Set `BROWSER_PROFILE_DIR=/path/to/chromium-profile` if you want Playwright to launch its own Chromium-family browser profile.
 - For Windows Edge from WSL, launching the `.exe` directly may fail. In that case start Edge yourself with a remote debugging port and use `BROWSER_CDP_URL=http://127.0.0.1:9222` instead.
 - If the automated browser shows LD Cloud login pages, authenticate in that browser/profile first.
@@ -148,5 +163,6 @@ Notes:
 - `dev_server.py` — no-cache static server plus current-tab automation endpoint
 - `automation.js` — Playwright-based pane automation for capture, reveal, and coordinate clicks
 - `scripts/towerpower-edge-debug.ps1` — Windows Edge launcher/reuse script for the visible debug window
-- `scripts/towerpower-cdp-click.ps1` — Windows CDP click helper for current-tab menu automation
+- `scripts/towerpower-cdp-click.ps1` — Windows CDP click helper for single current-tab menu clicks
+- `scripts/towerpower-cdp-run-action.ps1` — Windows CDP helper for current-tab menu → action → close sequences
 - `package.json` — local automation dependency and npm script

@@ -15,6 +15,7 @@ window.TOWER_POWER_CONFIG = {
   AUTOMATION: {
     paneA: {
       menuButton: null,
+      closeMenu: null,
       actions: {
         resolution1080p: null,
         resolution720p: null,
@@ -22,10 +23,21 @@ window.TOWER_POWER_CONFIG = {
     },
     paneB: {
       menuButton: null,
+      closeMenu: null,
       actions: {
         resolution1080p: null,
         resolution720p: null,
       },
     },
+  },
+
+  STARTUP_AUTOMATION: {
+    enabled: false,
+    initialDelayMs: 6000,
+    betweenActionsMs: 1500,
+    actions: [
+      { pane: "pane-a", action: "actions.resolution1080p" },
+      { pane: "pane-b", action: "actions.resolution1080p" },
+    ],
   },
 };

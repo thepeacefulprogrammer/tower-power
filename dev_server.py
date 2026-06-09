@@ -12,6 +12,8 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parent
 EDGE_DEBUG_SCRIPT = ROOT_DIR / "scripts" / "towerpower-edge-debug.ps1"
 CDP_CLICK_SCRIPT = ROOT_DIR / "scripts" / "towerpower-cdp-click.ps1"
+CDP_RUN_ACTION_SCRIPT = ROOT_DIR / "scripts" / "towerpower-cdp-run-action.ps1"
+LATEST_CAPTURE: dict[str, dict] = {}
 
 
 def to_windows_path(path: Path) -> str:
@@ -32,6 +34,7 @@ def to_windows_path(path: Path) -> str:
 
 EDGE_DEBUG_SCRIPT_WIN = to_windows_path(EDGE_DEBUG_SCRIPT)
 CDP_CLICK_SCRIPT_WIN = to_windows_path(CDP_CLICK_SCRIPT)
+CDP_RUN_ACTION_SCRIPT_WIN = to_windows_path(CDP_RUN_ACTION_SCRIPT)
 
 
 def should_retry_menubutton(stdout: str, stderr: str) -> bool:
@@ -65,11 +68,16 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
-    def do_POST(self) -> None:
-        if self.path != "/__automation":
-            self.send_error(404, "Not Found")
+    def do_GET(self) -> None:
+        if self.path.startswith("/__capture-stage-point"):
+            viewport_id = self.path.split("viewportId=", 1)[1] if "viewportId=" in self.path else ""
+            payload = LATEST_CAPTURE.get(viewport_id)
+            self.send_json(200, {"ok": True, "capture": payload})
             return
 
+        super().do_GET()
+
+    def do_POST(self) -> None:
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length) or b"{}")
@@ -77,10 +85,24 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
             self.send_json(400, {"ok": False, "error": f"Invalid JSON: {exc}"})
             return
 
+        if self.path == "/__capture-stage-point":
+            viewport_id = payload.get("viewportId")
+            if not isinstance(viewport_id, str) or not viewport_id:
+                self.send_json(400, {"ok": False, "error": "capture requires viewportId"})
+                return
+            LATEST_CAPTURE[viewport_id] = payload
+            self.send_json(200, {"ok": True})
+            return
+
+        if self.path != "/__automation":
+            self.send_error(404, "Not Found")
+            return
+
         pane = payload.get("pane")
         action = payload.get("action")
         viewport_id = payload.get("viewportId")
         point = payload.get("point") or {}
+        sequence = payload.get("sequence") or {}
         if pane not in {"pane-a", "pane-b"} or not isinstance(action, str) or not action:
             self.send_json(400, {"ok": False, "error": "Expected pane-a|pane-b and action string"})
             return
@@ -107,6 +129,46 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
                 str(round(x)),
                 "-StageY",
                 str(round(y)),
+            ]
+        elif action.startswith("actions."):
+            if not isinstance(viewport_id, str) or not isinstance(sequence, dict):
+                self.send_json(400, {"ok": False, "error": "actions.* requires viewportId and sequence"})
+                return
+            menu_point = sequence.get("menuButton") or {}
+            action_point = sequence.get("actionPoint") or {}
+            close_point = sequence.get("closeMenu") or {}
+            values = [
+                menu_point.get("x"),
+                menu_point.get("y"),
+                action_point.get("x"),
+                action_point.get("y"),
+                close_point.get("x"),
+                close_point.get("y"),
+            ]
+            if not all(isinstance(value, (int, float)) for value in values):
+                self.send_json(400, {"ok": False, "error": "actions.* requires numeric menu/action/close points"})
+                return
+            command = [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                CDP_RUN_ACTION_SCRIPT_WIN,
+                "-ViewportId",
+                viewport_id,
+                "-MenuX",
+                str(round(menu_point["x"])),
+                "-MenuY",
+                str(round(menu_point["y"])),
+                "-ActionX",
+                str(round(action_point["x"])),
+                "-ActionY",
+                str(round(action_point["y"])),
+                "-CloseX",
+                str(round(close_point["x"])),
+                "-CloseY",
+                str(round(close_point["y"])),
             ]
         else:
             command = ["node", "automation.js", "run-action", pane, action]

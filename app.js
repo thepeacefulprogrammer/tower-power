@@ -66,10 +66,16 @@ const closeAllPaneActionMenus = () => {
 	}
 };
 
-const getPaneAutomationPoint = (paneName, action) => {
+const getPaneConfigKey = (paneName) =>
+	paneName === "pane-a" ? "paneA" : "paneB";
+
+const getPaneAutomationConfig = (paneName) => {
 	const automation = currentConfig?.AUTOMATION || {};
-	const paneConfig =
-		paneName === "pane-a" ? automation.paneA || {} : automation.paneB || {};
+	return automation[getPaneConfigKey(paneName)] || {};
+};
+
+const getPaneAutomationPoint = (paneName, action) => {
+	const paneConfig = getPaneAutomationConfig(paneName);
 	if (action === "menuButton") {
 		return paneConfig.menuButton || null;
 	}
@@ -81,6 +87,24 @@ const getPaneAutomationPoint = (paneName, action) => {
 		return paneConfig.actions?.[actionName] || null;
 	}
 	return null;
+};
+
+const getPaneAutomationSequence = (paneName, action) => {
+	if (!action.startsWith("actions.")) {
+		return null;
+	}
+
+	const paneConfig = getPaneAutomationConfig(paneName);
+	const actionPoint = getPaneAutomationPoint(paneName, action);
+	if (!paneConfig.menuButton || !actionPoint || !paneConfig.closeMenu) {
+		return null;
+	}
+
+	return {
+		menuButton: paneConfig.menuButton,
+		actionPoint,
+		closeMenu: paneConfig.closeMenu,
+	};
 };
 
 const syncMenuToggleButton = (viewport) => {
@@ -101,14 +125,16 @@ const updateRevealState = (viewport, cropLeft) => {
 };
 
 const runPaneAutomation = async (viewport, action) => {
+	const paneName = viewport.dataset.pane;
 	const response = await fetch("/__automation", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({
-			pane: viewport.dataset.pane,
+			pane: paneName,
 			action,
 			viewportId: viewport.id,
-			point: getPaneAutomationPoint(viewport.dataset.pane, action),
+			point: getPaneAutomationPoint(paneName, action),
+			sequence: getPaneAutomationSequence(paneName, action),
 		}),
 	});
 
@@ -300,13 +326,96 @@ const getPaneClientPoint = (viewportId, point) => {
 	};
 };
 
+const getPaneStagePointFromClient = (viewportId, point) => {
+	const viewport = getPaneViewport(viewportId);
+	if (!viewport) {
+		return null;
+	}
+
+	const stage = viewport.querySelector(".pane-stage");
+	if (!stage) {
+		return null;
+	}
+
+	const lockedSize = ensureLockedPaneSize(viewport);
+	const stageRect = stage.getBoundingClientRect();
+	const scale = Math.min(
+		viewport.clientWidth / lockedSize.width,
+		viewport.clientHeight / lockedSize.height,
+	);
+
+	return {
+		x: (point.clientX - stageRect.left) / scale,
+		y: (point.clientY - stageRect.top) / scale,
+		scale,
+		lockedWidth: lockedSize.width,
+		lockedHeight: lockedSize.height,
+		stageLeft: stageRect.left,
+		stageTop: stageRect.top,
+		viewportId,
+	};
+};
+
 window.TowerPowerDebug = {
 	getPaneClientPoint,
+	getPaneStagePointFromClient,
 	setPaneMenuReveal,
 	togglePaneMenuReveal,
 };
 
 let lastConfigSignature = "";
+let startupAutomationScheduled = false;
+
+const delay = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+const scheduleStartupAutomation = (config) => {
+	if (startupAutomationScheduled) {
+		return;
+	}
+
+	const startup = config?.STARTUP_AUTOMATION;
+	if (
+		!startup?.enabled ||
+		!Array.isArray(startup.actions) ||
+		!startup.actions.length
+	) {
+		return;
+	}
+
+	startupAutomationScheduled = true;
+	const initialDelayMs = Math.max(Number(startup.initialDelayMs) || 0, 0);
+	const betweenActionsMs = Math.max(Number(startup.betweenActionsMs) || 0, 0);
+
+	window.setTimeout(async () => {
+		for (const item of startup.actions) {
+			const paneName = item?.pane;
+			const action = item?.action;
+			if (
+				!["pane-a", "pane-b"].includes(paneName) ||
+				typeof action !== "string"
+			) {
+				continue;
+			}
+
+			const viewportId =
+				paneName === "pane-a" ? "pane-a-viewport" : "pane-b-viewport";
+			const viewport = document.getElementById(viewportId);
+			if (!viewport) {
+				continue;
+			}
+
+			try {
+				await runPaneAutomation(viewport, action);
+			} catch (error) {
+				console.error("[TowerPower startup automation]", error);
+			}
+
+			if (betweenActionsMs > 0) {
+				await delay(betweenActionsMs);
+			}
+		}
+	}, initialDelayMs);
+};
 
 const refreshConfig = async () => {
 	try {
@@ -318,6 +427,7 @@ const refreshConfig = async () => {
 		}
 		lastConfigSignature = signature;
 		applyConfig(config);
+		scheduleStartupAutomation(config);
 	} catch (error) {
 		console.error(error);
 	}
@@ -328,5 +438,6 @@ document.addEventListener("click", () => {
 });
 
 applyConfig(window.TOWER_POWER_CONFIG || {});
+scheduleStartupAutomation(window.TOWER_POWER_CONFIG || {});
 refreshConfig();
 window.setInterval(refreshConfig, 1000);
