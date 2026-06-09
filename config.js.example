@@ -18,6 +18,7 @@ window.TOWER_POWER_CONFIG = {
       closeMenu: null,
       actions: {
         resolution1080p: null,
+        hidden: null,
         resolution720p: null,
       },
     },
@@ -26,6 +27,7 @@ window.TOWER_POWER_CONFIG = {
       closeMenu: null,
       actions: {
         resolution1080p: null,
+        hidden: null,
         resolution720p: null,
       },
     },
@@ -36,8 +38,8 @@ window.TOWER_POWER_CONFIG = {
     initialDelayMs: 6000,
     betweenActionsMs: 1500,
     actions: [
-      { pane: "pane-a", action: "actions.resolution1080p" },
-      { pane: "pane-b", action: "actions.resolution1080p" },
+      { pane: "pane-a", actions: ["actions.resolution1080p", "actions.hidden"] },
+      { pane: "pane-b", actions: ["actions.resolution1080p", "actions.hidden"] },
     ],
   },
 };

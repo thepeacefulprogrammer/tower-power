@@ -135,19 +135,27 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
                 self.send_json(400, {"ok": False, "error": "actions.* requires viewportId and sequence"})
                 return
             menu_point = sequence.get("menuButton") or {}
-            action_point = sequence.get("actionPoint") or {}
+            action_points = sequence.get("actionPoints") or []
             close_point = sequence.get("closeMenu") or {}
-            values = [
-                menu_point.get("x"),
-                menu_point.get("y"),
-                action_point.get("x"),
-                action_point.get("y"),
-                close_point.get("x"),
-                close_point.get("y"),
-            ]
-            if not all(isinstance(value, (int, float)) for value in values):
-                self.send_json(400, {"ok": False, "error": "actions.* requires numeric menu/action/close points"})
+            menu_values = [menu_point.get("x"), menu_point.get("y")]
+            close_values = [close_point.get("x"), close_point.get("y")]
+            if not all(isinstance(value, (int, float)) for value in [*menu_values, *close_values]):
+                self.send_json(400, {"ok": False, "error": "actions.* requires numeric menu/close points"})
                 return
+            if not isinstance(action_points, list) or not action_points:
+                self.send_json(400, {"ok": False, "error": "actions.* requires one or more actionPoints"})
+                return
+            normalized_action_points = []
+            for action_point in action_points:
+                if not isinstance(action_point, dict):
+                    self.send_json(400, {"ok": False, "error": "each actionPoint must be an object"})
+                    return
+                x = action_point.get("x")
+                y = action_point.get("y")
+                if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                    self.send_json(400, {"ok": False, "error": "each actionPoint requires numeric x and y"})
+                    return
+                normalized_action_points.append({"x": round(x), "y": round(y)})
             command = [
                 "powershell.exe",
                 "-NoProfile",
@@ -161,10 +169,8 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
                 str(round(menu_point["x"])),
                 "-MenuY",
                 str(round(menu_point["y"])),
-                "-ActionX",
-                str(round(action_point["x"])),
-                "-ActionY",
-                str(round(action_point["y"])),
+                "-ActionPointsJson",
+                json.dumps(normalized_action_points, separators=(",", ":")),
                 "-CloseX",
                 str(round(close_point["x"])),
                 "-CloseY",

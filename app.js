@@ -14,6 +14,12 @@ const normalizeCrop = (value) => {
 const lockedPaneSizes = new Map();
 const revealState = new Map();
 let currentConfig = window.TOWER_POWER_CONFIG || {};
+let currentMobilePane = "pane-a";
+let activeCoordinateCaptureViewportId = null;
+let swipeStart = null;
+
+const MOBILE_MEDIA_QUERY = "(max-width: 980px)";
+const SWIPE_THRESHOLD_PX = 50;
 
 const buildPaneConfig = (config, prefix) => ({
 	deviceId: config[`${prefix}`],
@@ -37,12 +43,25 @@ const ensureLockedPaneSize = (viewport) => {
 	return size;
 };
 
-const updateViewportScale = (viewport) => {
+const getViewportScale = (viewport) => {
 	const lockedSize = ensureLockedPaneSize(viewport);
-	const scale = Math.min(
+	const cropRight = normalizeCrop(viewport.dataset.cropRight || "0");
+	const cropLeft = normalizeCrop(viewport.dataset.cropLeft || "0");
+
+	if (isMobileLayout()) {
+		const visibleWidth = Math.max(lockedSize.width - cropLeft - cropRight, 1);
+		return viewport.clientWidth / visibleWidth;
+	}
+
+	return Math.min(
 		viewport.clientWidth / lockedSize.width,
 		viewport.clientHeight / lockedSize.height,
 	);
+};
+
+const updateViewportScale = (viewport) => {
+	const lockedSize = ensureLockedPaneSize(viewport);
+	const scale = getViewportScale(viewport);
 
 	viewport.style.setProperty("--locked-width", `${lockedSize.width}px`);
 	viewport.style.setProperty("--locked-height", `${lockedSize.height}px`);
@@ -64,6 +83,84 @@ const closeAllPaneActionMenus = () => {
 	for (const viewport of document.querySelectorAll(".pane-viewport")) {
 		closePaneActionMenu(viewport);
 	}
+};
+
+const isMobileLayout = () => window.matchMedia(MOBILE_MEDIA_QUERY).matches;
+
+const syncCoordinateCaptureState = () => {
+	for (const viewport of document.querySelectorAll(".pane-viewport")) {
+		viewport.dataset.captureActive = String(
+			viewport.id === activeCoordinateCaptureViewportId,
+		);
+		const overlay = viewport.querySelector(".pane-coordinate-overlay");
+		if (overlay) {
+			overlay.setAttribute(
+				"aria-hidden",
+				String(viewport.id !== activeCoordinateCaptureViewportId),
+			);
+		}
+	}
+};
+
+const clearCoordinateCapture = () => {
+	activeCoordinateCaptureViewportId = null;
+	syncCoordinateCaptureState();
+};
+
+const openCoordinatePopup = async (viewport, point) => {
+	const rounded = {
+		x: Math.round(point.x),
+		y: Math.round(point.y),
+	};
+	const text = `{ x: ${rounded.x}, y: ${rounded.y} }`;
+	try {
+		await navigator.clipboard.writeText(text);
+	} catch (_error) {
+		// ignore clipboard failures
+	}
+	window.prompt(
+		`Coordinates for ${viewport.dataset.pane} copied to clipboard`,
+		text,
+	);
+};
+
+const startCoordinateCapture = (viewportId) => {
+	activeCoordinateCaptureViewportId = viewportId;
+	closeAllPaneActionMenus();
+	syncCoordinateCaptureState();
+};
+
+const applyMobilePaneState = () => {
+	document.body.dataset.mobilePane = currentMobilePane;
+	for (const viewport of document.querySelectorAll(".pane-viewport")) {
+		viewport.dataset.mobileActive = String(
+			viewport.dataset.pane === currentMobilePane,
+		);
+		updateViewportScale(viewport);
+	}
+
+	for (const button of document.querySelectorAll(".pane-switch-button")) {
+		const isActive = button.dataset.targetPane === currentMobilePane;
+		button.setAttribute("aria-selected", String(isActive));
+	}
+};
+
+const setMobilePane = (paneName) => {
+	if (!["pane-a", "pane-b"].includes(paneName)) {
+		return false;
+	}
+	currentMobilePane = paneName;
+	closeAllPaneActionMenus();
+	applyMobilePaneState();
+	return true;
+};
+
+const switchMobilePaneByDelta = (delta) => {
+	if (!isMobileLayout() || !delta) {
+		return false;
+	}
+	const nextPane = currentMobilePane === "pane-a" ? "pane-b" : "pane-a";
+	return setMobilePane(nextPane);
 };
 
 const getPaneConfigKey = (paneName) =>
@@ -89,20 +186,40 @@ const getPaneAutomationPoint = (paneName, action) => {
 	return null;
 };
 
+const normalizeActionList = (action) => {
+	if (typeof action === "string") {
+		return [action];
+	}
+	if (Array.isArray(action)) {
+		return action.filter((item) => typeof item === "string");
+	}
+	return [];
+};
+
 const getPaneAutomationSequence = (paneName, action) => {
-	if (!action.startsWith("actions.")) {
+	const actions = normalizeActionList(action);
+	if (
+		!actions.length ||
+		!actions.every((item) => item.startsWith("actions."))
+	) {
 		return null;
 	}
 
 	const paneConfig = getPaneAutomationConfig(paneName);
-	const actionPoint = getPaneAutomationPoint(paneName, action);
-	if (!paneConfig.menuButton || !actionPoint || !paneConfig.closeMenu) {
+	const actionPoints = actions
+		.map((item) => getPaneAutomationPoint(paneName, item))
+		.filter(Boolean);
+	if (
+		!paneConfig.menuButton ||
+		actionPoints.length !== actions.length ||
+		!paneConfig.closeMenu
+	) {
 		return null;
 	}
 
 	return {
 		menuButton: paneConfig.menuButton,
-		actionPoint,
+		actionPoints,
 		closeMenu: paneConfig.closeMenu,
 	};
 };
@@ -126,14 +243,15 @@ const updateRevealState = (viewport, cropLeft) => {
 
 const runPaneAutomation = async (viewport, action) => {
 	const paneName = viewport.dataset.pane;
+	const primaryAction = Array.isArray(action) ? action[0] : action;
 	const response = await fetch("/__automation", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({
 			pane: paneName,
-			action,
+			action: primaryAction,
 			viewportId: viewport.id,
-			point: getPaneAutomationPoint(paneName, action),
+			point: getPaneAutomationPoint(paneName, primaryAction),
 			sequence: getPaneAutomationSequence(paneName, action),
 		}),
 	});
@@ -171,6 +289,39 @@ const wirePaneControls = (viewport) => {
 		menu.hidden = !opening;
 	});
 
+	for (const switchButton of viewport.querySelectorAll(".pane-switch-button")) {
+		switchButton.addEventListener("click", (event) => {
+			event.stopPropagation();
+			setMobilePane(switchButton.dataset.targetPane);
+		});
+	}
+
+	for (const captureButton of menu.querySelectorAll(
+		"[data-capture-coordinates]",
+	)) {
+		captureButton.addEventListener("click", (event) => {
+			event.stopPropagation();
+			startCoordinateCapture(viewport.id);
+		});
+	}
+
+	const overlay = viewport.querySelector(".pane-coordinate-overlay");
+	if (overlay) {
+		overlay.addEventListener("click", async (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			const point = getPaneStagePointFromClient(viewport.id, {
+				clientX: event.clientX,
+				clientY: event.clientY,
+			});
+			clearCoordinateCapture();
+			if (!point) {
+				return;
+			}
+			await openCoordinatePopup(viewport, point);
+		});
+	}
+
 	for (const button of menu.querySelectorAll(".pane-action-button")) {
 		button.addEventListener("click", async (event) => {
 			event.stopPropagation();
@@ -202,6 +353,68 @@ const viewportObserver = new ResizeObserver((entries) => {
 		updateViewportScale(entry.target);
 	}
 });
+
+const wireMobileSwipeNavigation = () => {
+	const grid = document.querySelector(".pane-grid");
+	if (!grid || grid.dataset.mobileSwipeBound === "true") {
+		return;
+	}
+
+	grid.addEventListener(
+		"touchstart",
+		(event) => {
+			if (!isMobileLayout() || event.touches.length !== 1) {
+				swipeStart = null;
+				return;
+			}
+			const touch = event.touches[0];
+			swipeStart = { x: touch.clientX, y: touch.clientY };
+		},
+		{ passive: true },
+	);
+
+	grid.addEventListener(
+		"touchend",
+		(event) => {
+			if (
+				!isMobileLayout() ||
+				!swipeStart ||
+				event.changedTouches.length !== 1
+			) {
+				swipeStart = null;
+				return;
+			}
+
+			const touch = event.changedTouches[0];
+			const deltaX = touch.clientX - swipeStart.x;
+			const deltaY = touch.clientY - swipeStart.y;
+			swipeStart = null;
+
+			if (
+				Math.abs(deltaX) < SWIPE_THRESHOLD_PX ||
+				Math.abs(deltaX) <= Math.abs(deltaY)
+			) {
+				return;
+			}
+
+			if (deltaX < 0) {
+				switchMobilePaneByDelta(1);
+			} else {
+				switchMobilePaneByDelta(-1);
+			}
+		},
+		{ passive: true },
+	);
+
+	window.addEventListener("resize", () => {
+		applyMobilePaneState();
+		for (const viewport of document.querySelectorAll(".pane-viewport")) {
+			updateViewportScale(viewport);
+		}
+	});
+	grid.dataset.mobileSwipeBound = "true";
+	applyMobilePaneState();
+};
 
 const applyDevice = ({
 	iframeId,
@@ -235,12 +448,20 @@ const applyDevice = ({
 	}
 	iframe.title = `LD Cloud device ${normalizedDeviceId}`;
 
-	viewport.style.setProperty("--crop-top", `${normalizeCrop(cropTop)}px`);
-	viewport.style.setProperty("--crop-right", `${normalizeCrop(cropRight)}px`);
-	viewport.style.setProperty("--crop-bottom", `${normalizeCrop(cropBottom)}px`);
-	viewport.style.setProperty("--crop-left", `${normalizeCrop(cropLeft)}px`);
-	viewport.dataset.cropLeft = String(normalizeCrop(cropLeft));
+	const normalizedCropTop = normalizeCrop(cropTop);
+	const normalizedCropRight = normalizeCrop(cropRight);
+	const normalizedCropBottom = normalizeCrop(cropBottom);
+	const normalizedCropLeft = normalizeCrop(cropLeft);
+	viewport.style.setProperty("--crop-top", `${normalizedCropTop}px`);
+	viewport.style.setProperty("--crop-right", `${normalizedCropRight}px`);
+	viewport.style.setProperty("--crop-bottom", `${normalizedCropBottom}px`);
+	viewport.style.setProperty("--crop-left", `${normalizedCropLeft}px`);
+	viewport.dataset.cropTop = String(normalizedCropTop);
+	viewport.dataset.cropRight = String(normalizedCropRight);
+	viewport.dataset.cropBottom = String(normalizedCropBottom);
+	viewport.dataset.cropLeft = String(normalizedCropLeft);
 	updateRevealState(viewport, cropLeft);
+	updateViewportScale(viewport);
 };
 
 const applyConfig = (config) => {
@@ -312,10 +533,7 @@ const getPaneClientPoint = (viewportId, point) => {
 
 	const lockedSize = ensureLockedPaneSize(viewport);
 	const stageRect = stage.getBoundingClientRect();
-	const scale = Math.min(
-		viewport.clientWidth / lockedSize.width,
-		viewport.clientHeight / lockedSize.height,
-	);
+	const scale = stageRect.width / lockedSize.width;
 
 	return {
 		clientX: stageRect.left + point.x * scale,
@@ -339,10 +557,7 @@ const getPaneStagePointFromClient = (viewportId, point) => {
 
 	const lockedSize = ensureLockedPaneSize(viewport);
 	const stageRect = stage.getBoundingClientRect();
-	const scale = Math.min(
-		viewport.clientWidth / lockedSize.width,
-		viewport.clientHeight / lockedSize.height,
-	);
+	const scale = stageRect.width / lockedSize.width;
 
 	return {
 		x: (point.clientX - stageRect.left) / scale,
@@ -389,10 +604,11 @@ const scheduleStartupAutomation = (config) => {
 	window.setTimeout(async () => {
 		for (const item of startup.actions) {
 			const paneName = item?.pane;
-			const action = item?.action;
+			const action = Array.isArray(item?.actions) ? item.actions : item?.action;
+			const normalizedActions = normalizeActionList(action);
 			if (
 				!["pane-a", "pane-b"].includes(paneName) ||
-				typeof action !== "string"
+				!normalizedActions.length
 			) {
 				continue;
 			}
@@ -405,7 +621,7 @@ const scheduleStartupAutomation = (config) => {
 			}
 
 			try {
-				await runPaneAutomation(viewport, action);
+				await runPaneAutomation(viewport, normalizedActions);
 			} catch (error) {
 				console.error("[TowerPower startup automation]", error);
 			}
@@ -427,6 +643,11 @@ const refreshConfig = async () => {
 		}
 		lastConfigSignature = signature;
 		applyConfig(config);
+		window.requestAnimationFrame(() => {
+			for (const viewport of document.querySelectorAll(".pane-viewport")) {
+				updateViewportScale(viewport);
+			}
+		});
 		scheduleStartupAutomation(config);
 	} catch (error) {
 		console.error(error);
@@ -437,7 +658,15 @@ document.addEventListener("click", () => {
 	closeAllPaneActionMenus();
 });
 
+document.addEventListener("keydown", (event) => {
+	if (event.key === "Escape") {
+		clearCoordinateCapture();
+	}
+});
+
+wireMobileSwipeNavigation();
 applyConfig(window.TOWER_POWER_CONFIG || {});
+applyMobilePaneState();
 scheduleStartupAutomation(window.TOWER_POWER_CONFIG || {});
 refreshConfig();
 window.setInterval(refreshConfig, 1000);

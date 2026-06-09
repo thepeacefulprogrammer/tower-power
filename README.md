@@ -33,6 +33,7 @@ window.TOWER_POWER_CONFIG = {
       closeMenu: null,
       actions: {
         resolution1080p: null,
+        hidden: null,
         resolution720p: null,
       },
     },
@@ -41,6 +42,7 @@ window.TOWER_POWER_CONFIG = {
       closeMenu: null,
       actions: {
         resolution1080p: null,
+        hidden: null,
         resolution720p: null,
       },
     },
@@ -51,8 +53,8 @@ window.TOWER_POWER_CONFIG = {
     initialDelayMs: 6000,
     betweenActionsMs: 1500,
     actions: [
-      { pane: "pane-a", action: "actions.resolution1080p" },
-      { pane: "pane-b", action: "actions.resolution1080p" },
+      { pane: "pane-a", actions: ["actions.resolution1080p", "actions.hidden"] },
+      { pane: "pane-b", actions: ["actions.resolution1080p", "actions.hidden"] },
     ],
   },
 };
@@ -89,7 +91,7 @@ For automation helpers:
 
 `AUTOMATION.paneA` and `AUTOMATION.paneB` are optional local coordinate maps for the browser automation script. Store `menuButton`, `closeMenu`, and any menu item coordinates there after calibration.
 
-`STARTUP_AUTOMATION` is optional. When enabled, the page will trigger the listed pane actions once after load using the current visible Edge tab.
+`STARTUP_AUTOMATION` is optional. When enabled, the page will trigger the listed pane actions once after load using the current visible Edge tab. Each item can use either a single `action` string or an `actions` array to click multiple menu items before closing the menu.
 
 Example viewport IDs are `pane-a-viewport` and `pane-b-viewport`.
 
@@ -109,6 +111,7 @@ By default it:
 - on WSL, opens the app in the same Windows Edge debug window used by pane automation
 - serves files with no-cache headers for dev use
 - watches `config.js` from the browser and reapplies changes about once per second without requiring a page reload
+- on narrow/mobile screens, shows one pane at a time and lets you swipe left/right to switch panes
 
 Optional environment variables:
 
@@ -145,9 +148,11 @@ npm run automate -- action pane-b actions.resolution1080p
 Notes:
 
 - `capture` is available from the Playwright CLI if you need to recalibrate coordinates later.
+- the pane hamburger menu also includes **Pick coordinates**, which temporarily overlays the pane and shows a popup with `{ x, y }` after your next click.
 - `open-menu` uses `AUTOMATION.paneA.menuButton` or `AUTOMATION.paneB.menuButton` from `config.js`.
 - `action` uses `AUTOMATION.paneA.actions.*` or `AUTOMATION.paneB.actions.*` from `config.js`.
 - current-tab action sequences also need `closeMenu` for that pane.
+- startup sequences can click multiple items before close by using `actions: ["actions.resolution1080p", "actions.hidden"]`.
 - Set `BROWSER_PROFILE_DIR=/path/to/chromium-profile` if you want Playwright to launch its own Chromium-family browser profile.
 - For Windows Edge from WSL, launching the `.exe` directly may fail. In that case start Edge yourself with a remote debugging port and use `BROWSER_CDP_URL=http://127.0.0.1:9222` instead.
 - If the automated browser shows LD Cloud login pages, authenticate in that browser/profile first.
@@ -164,5 +169,5 @@ Notes:
 - `automation.js` — Playwright-based pane automation for capture, reveal, and coordinate clicks
 - `scripts/towerpower-edge-debug.ps1` — Windows Edge launcher/reuse script for the visible debug window
 - `scripts/towerpower-cdp-click.ps1` — Windows CDP click helper for single current-tab menu clicks
-- `scripts/towerpower-cdp-run-action.ps1` — Windows CDP helper for current-tab menu → action → close sequences
+- `scripts/towerpower-cdp-run-action.ps1` — Windows CDP helper for current-tab menu → one-or-more actions → close sequences
 - `package.json` — local automation dependency and npm script

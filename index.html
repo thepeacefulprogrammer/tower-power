@@ -19,6 +19,26 @@
           >
             ☰
           </button>
+          <div class="pane-switch-tabs" role="tablist" aria-label="Choose pane">
+            <button
+              class="pane-switch-button"
+              type="button"
+              data-target-pane="pane-a"
+              role="tab"
+              aria-selected="true"
+            >
+              A
+            </button>
+            <button
+              class="pane-switch-button"
+              type="button"
+              data-target-pane="pane-b"
+              role="tab"
+              aria-selected="false"
+            >
+              B
+            </button>
+          </div>
           <div class="pane-action-menu" id="pane-a-action-menu" hidden>
             <button
               class="pane-action-button"
@@ -26,6 +46,13 @@
               data-automation-action="menuButton"
             >
               Open menu
+            </button>
+            <button
+              class="pane-action-button"
+              type="button"
+              data-capture-coordinates="true"
+            >
+              Pick coordinates
             </button>
           </div>
         </div>
@@ -41,6 +68,7 @@
           <div class="pane-mask pane-mask-right"></div>
           <div class="pane-mask pane-mask-bottom"></div>
           <div class="pane-mask pane-mask-left"></div>
+          <div class="pane-coordinate-overlay" aria-hidden="true"></div>
         </div>
       </section>
       <section class="pane-viewport" id="pane-b-viewport" data-pane="pane-b">
@@ -54,6 +82,26 @@
           >
             ☰
           </button>
+          <div class="pane-switch-tabs" role="tablist" aria-label="Choose pane">
+            <button
+              class="pane-switch-button"
+              type="button"
+              data-target-pane="pane-a"
+              role="tab"
+              aria-selected="true"
+            >
+              A
+            </button>
+            <button
+              class="pane-switch-button"
+              type="button"
+              data-target-pane="pane-b"
+              role="tab"
+              aria-selected="false"
+            >
+              B
+            </button>
+          </div>
           <div class="pane-action-menu" id="pane-b-action-menu" hidden>
             <button
               class="pane-action-button"
@@ -61,6 +109,13 @@
               data-automation-action="menuButton"
             >
               Open menu
+            </button>
+            <button
+              class="pane-action-button"
+              type="button"
+              data-capture-coordinates="true"
+            >
+              Pick coordinates
             </button>
           </div>
         </div>
@@ -76,6 +131,7 @@
           <div class="pane-mask pane-mask-right"></div>
           <div class="pane-mask pane-mask-bottom"></div>
           <div class="pane-mask pane-mask-left"></div>
+          <div class="pane-coordinate-overlay" aria-hidden="true"></div>
         </div>
       </section>
     </main>

@@ -2,11 +2,10 @@ param(
   [Parameter(Mandatory=$true)][string]$ViewportId,
   [Parameter(Mandatory=$true)][int]$MenuX,
   [Parameter(Mandatory=$true)][int]$MenuY,
-  [Parameter(Mandatory=$true)][int]$ActionX,
-  [Parameter(Mandatory=$true)][int]$ActionY,
+  [Parameter(Mandatory=$true)][string]$ActionPointsJson,
   [Parameter(Mandatory=$true)][int]$CloseX,
   [Parameter(Mandatory=$true)][int]$CloseY,
-  [int]$StepDelayMs = 800
+  [int]$StepDelayMs = 250
 )
 
 $ErrorActionPreference = 'Stop'
@@ -65,23 +64,45 @@ function Click-Point([int]$PressId, [int]$ReleaseId, $Point) {
   $null = Receive-UntilId $ReleaseId
 }
 
-$menuPoint = Get-ClientPoint 1 $MenuX $MenuY
-$actionPoint = Get-ClientPoint 2 $ActionX $ActionY
-$closePoint = Get-ClientPoint 3 $CloseX $CloseY
+$parsedActionPoints = $ActionPointsJson | ConvertFrom-Json
+if ($parsedActionPoints -is [System.Array]) {
+  $actionStagePoints = $parsedActionPoints
+} else {
+  $actionStagePoints = @($parsedActionPoints)
+}
+if (-not $actionStagePoints.Count) {
+  throw 'ActionPointsJson must contain at least one action point.'
+}
 
-Click-Point 4 5 $menuPoint
+$menuPoint = Get-ClientPoint 1 $MenuX $MenuY
+$actionClientPoints = @()
+$id = 2
+foreach ($stagePoint in $actionStagePoints) {
+  if ($null -eq $stagePoint.x -or $null -eq $stagePoint.y) {
+    throw 'Each action point must include x and y.'
+  }
+  $actionClientPoints += Get-ClientPoint $id ([int]$stagePoint.x) ([int]$stagePoint.y)
+  $id += 1
+}
+$closePoint = Get-ClientPoint $id $CloseX $CloseY
+$id += 1
+
+Click-Point $id ($id + 1) $menuPoint
+$id += 2
 Start-Sleep -Milliseconds $StepDelayMs
-Click-Point 6 7 $actionPoint
-Start-Sleep -Milliseconds $StepDelayMs
-Click-Point 8 9 $closePoint
+foreach ($actionPoint in $actionClientPoints) {
+  Click-Point $id ($id + 1) $actionPoint
+  $id += 2
+  Start-Sleep -Milliseconds $StepDelayMs
+}
+Click-Point $id ($id + 1) $closePoint
 
 $result = @{
   ok = $true
   viewportId = $ViewportId
   menuClientX = $menuPoint.clientX
   menuClientY = $menuPoint.clientY
-  actionClientX = $actionPoint.clientX
-  actionClientY = $actionPoint.clientY
+  actionClientPoints = $actionClientPoints
   closeClientX = $closePoint.clientX
   closeClientY = $closePoint.clientY
   debuggerPageId = $page.id
