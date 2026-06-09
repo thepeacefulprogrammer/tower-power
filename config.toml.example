@@ -1,0 +1,9 @@
+# Copy this file to config.toml and replace the placeholder values below.
+#
+# DEVICE_A and DEVICE_B are your LD Cloud deviceId values.
+# You can find each one in the LD Cloud device URL, for example:
+# https://www.ldcloud.net/web/webRtcNew?deviceId=1234567&type=my
+#                                             ^^^^^^^ this number is the deviceId
+
+DEVICE_A = "YOUR_FIRST_DEVICE_ID"
+DEVICE_B = "YOUR_SECOND_DEVICE_ID"
