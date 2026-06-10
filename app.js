@@ -20,6 +20,13 @@ let swipeStart = null;
 
 const MOBILE_MEDIA_QUERY = "(max-width: 980px)";
 const SWIPE_THRESHOLD_PX = 50;
+const GEM_DETECTION_REFRESH_MS = 2000;
+const GEM_COLLECTION_STORAGE_KEY = "tower-power.collect-gems";
+const GEM_CLICK_DITHER_PX = 4;
+
+const gemCollectionEnabled = new Map();
+const gemClickInFlight = new Set();
+const gemLastAttemptSignature = new Map();
 
 const buildPaneConfig = (config, prefix) => ({
 	deviceId: config[`${prefix}`],
@@ -128,6 +135,174 @@ const startCoordinateCapture = (viewportId) => {
 	activeCoordinateCaptureViewportId = viewportId;
 	closeAllPaneActionMenus();
 	syncCoordinateCaptureState();
+};
+
+const readCollectGemsPreferences = () => {
+	try {
+		const raw = window.localStorage.getItem(GEM_COLLECTION_STORAGE_KEY);
+		if (!raw) {
+			return {};
+		}
+		const parsed = JSON.parse(raw);
+		return parsed && typeof parsed === "object" ? parsed : {};
+	} catch (_error) {
+		return {};
+	}
+};
+
+const writeCollectGemsPreferences = (preferences) => {
+	try {
+		window.localStorage.setItem(
+			GEM_COLLECTION_STORAGE_KEY,
+			JSON.stringify(preferences),
+		);
+	} catch (_error) {
+		// ignore storage failures
+	}
+};
+
+const isCollectGemsEnabled = (paneName) => {
+	if (gemCollectionEnabled.has(paneName)) {
+		return gemCollectionEnabled.get(paneName) === true;
+	}
+
+	const preferences = readCollectGemsPreferences();
+	const enabled = preferences[paneName] !== false;
+	gemCollectionEnabled.set(paneName, enabled);
+	return enabled;
+};
+
+const syncCollectGemsToggle = (viewport) => {
+	const paneName = viewport.dataset.pane;
+	const toggle = viewport.querySelector("[data-collect-gems-toggle]");
+	if (!paneName || !toggle) {
+		return;
+	}
+
+	toggle.checked = isCollectGemsEnabled(paneName);
+};
+
+const setCollectGemsEnabled = (paneName, enabled) => {
+	const normalizedEnabled = Boolean(enabled);
+	gemCollectionEnabled.set(paneName, normalizedEnabled);
+	const preferences = readCollectGemsPreferences();
+	preferences[paneName] = normalizedEnabled;
+	writeCollectGemsPreferences(preferences);
+
+	for (const viewport of document.querySelectorAll(".pane-viewport")) {
+		if (viewport.dataset.pane === paneName) {
+			syncCollectGemsToggle(viewport);
+		}
+	}
+};
+
+const buildGemAttemptSignature = (result) => {
+	const point = result?.wouldClickStagePoint;
+	if (!point) {
+		return "";
+	}
+	return `${result?.checkedAt || ""}:${Math.round(point.x)}:${Math.round(point.y)}`;
+};
+
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+const ditherGemClickPoint = (viewport, point) => {
+	const lockedSize = ensureLockedPaneSize(viewport);
+	const randomOffset = () =>
+		Math.round((Math.random() * 2 - 1) * GEM_CLICK_DITHER_PX);
+
+	return {
+		x: clamp(Math.round(point.x) + randomOffset(), 0, lockedSize.width),
+		y: clamp(Math.round(point.y) + randomOffset(), 0, lockedSize.height),
+	};
+};
+
+const maybeCollectGem = async (viewport, result) => {
+	const paneName = viewport.dataset.pane;
+	if (
+		!paneName ||
+		!isCollectGemsEnabled(paneName) ||
+		!result?.found ||
+		!result?.wouldClickStagePoint
+	) {
+		return;
+	}
+
+	const signature = buildGemAttemptSignature(result);
+	if (
+		!signature ||
+		gemClickInFlight.has(paneName) ||
+		gemLastAttemptSignature.get(paneName) === signature
+	) {
+		return;
+	}
+
+	gemClickInFlight.add(paneName);
+	gemLastAttemptSignature.set(paneName, signature);
+	try {
+		await runPaneStageClick(
+			viewport,
+			ditherGemClickPoint(viewport, result.wouldClickStagePoint),
+		);
+	} catch (error) {
+		gemLastAttemptSignature.delete(paneName);
+		console.error("[TowerPower gem collection]", error);
+	} finally {
+		gemClickInFlight.delete(paneName);
+	}
+};
+
+const applyGemDetectionResult = (result) => {
+	const paneName = result?.pane;
+	const viewportId =
+		paneName === "pane-a"
+			? "pane-a-viewport"
+			: paneName === "pane-b"
+				? "pane-b-viewport"
+				: null;
+	if (!viewportId) {
+		return;
+	}
+
+	const viewport = document.getElementById(viewportId);
+	if (!viewport) {
+		return;
+	}
+
+	if (result?.state === "error") {
+		console.error("[TowerPower gem detection]", paneName, result?.error);
+		return;
+	}
+
+	void maybeCollectGem(viewport, result);
+};
+
+const refreshGemDetection = async () => {
+	try {
+		const response = await fetch(`/__gem-detection?t=${Date.now()}`, {
+			cache: "no-store",
+		});
+		if (!response.ok) {
+			throw new Error(`Gem detection status failed: ${response.status}`);
+		}
+
+		const payload = await response.json();
+		const results = payload?.results || {};
+		applyGemDetectionResult(results["pane-a"] || { pane: "pane-a" });
+		applyGemDetectionResult(results["pane-b"] || { pane: "pane-b" });
+	} catch (error) {
+		console.error("[TowerPower gem detection]", error);
+		applyGemDetectionResult({
+			pane: "pane-a",
+			state: "error",
+			error: error instanceof Error ? error.message : String(error),
+		});
+		applyGemDetectionResult({
+			pane: "pane-b",
+			state: "error",
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 };
 
 const applyMobilePaneState = () => {
@@ -241,7 +416,7 @@ const updateRevealState = (viewport, cropLeft) => {
 	syncMenuToggleButton(viewport);
 };
 
-const runPaneAutomation = async (viewport, action) => {
+const runPaneAutomation = async (viewport, action, options = {}) => {
 	const paneName = viewport.dataset.pane;
 	const primaryAction = Array.isArray(action) ? action[0] : action;
 	const response = await fetch("/__automation", {
@@ -251,8 +426,14 @@ const runPaneAutomation = async (viewport, action) => {
 			pane: paneName,
 			action: primaryAction,
 			viewportId: viewport.id,
-			point: getPaneAutomationPoint(paneName, primaryAction),
-			sequence: getPaneAutomationSequence(paneName, action),
+			point:
+				options.point === undefined
+					? getPaneAutomationPoint(paneName, primaryAction)
+					: options.point,
+			sequence:
+				options.sequence === undefined
+					? getPaneAutomationSequence(paneName, action)
+					: options.sequence,
 		}),
 	});
 
@@ -269,6 +450,9 @@ const runPaneAutomation = async (viewport, action) => {
 	console.log("[TowerPower automation]", payload);
 	return payload;
 };
+
+const runPaneStageClick = (viewport, point) =>
+	runPaneAutomation(viewport, "stagePoint", { point, sequence: null });
 
 const wirePaneControls = (viewport) => {
 	if (viewport.dataset.menuToggleBound === "true") {
@@ -293,6 +477,23 @@ const wirePaneControls = (viewport) => {
 		switchButton.addEventListener("click", (event) => {
 			event.stopPropagation();
 			setMobilePane(switchButton.dataset.targetPane);
+		});
+	}
+
+	for (const toggleRow of menu.querySelectorAll(".pane-action-toggle")) {
+		toggleRow.addEventListener("click", (event) => {
+			event.stopPropagation();
+		});
+	}
+
+	for (const toggle of menu.querySelectorAll("[data-collect-gems-toggle]")) {
+		syncCollectGemsToggle(viewport);
+		toggle.addEventListener("change", (event) => {
+			const target = event.currentTarget;
+			if (!target) {
+				return;
+			}
+			setCollectGemsEnabled(viewport.dataset.pane, target.checked);
 		});
 	}
 
@@ -437,6 +638,7 @@ const applyDevice = ({
 	updateViewportScale(viewport);
 	viewportObserver.observe(viewport);
 	wirePaneControls(viewport);
+	syncCollectGemsToggle(viewport);
 
 	viewport.dataset.pane =
 		viewport.dataset.pane ||
@@ -669,4 +871,6 @@ applyConfig(window.TOWER_POWER_CONFIG || {});
 applyMobilePaneState();
 scheduleStartupAutomation(window.TOWER_POWER_CONFIG || {});
 refreshConfig();
+refreshGemDetection();
 window.setInterval(refreshConfig, 1000);
+window.setInterval(refreshGemDetection, GEM_DETECTION_REFRESH_MS);

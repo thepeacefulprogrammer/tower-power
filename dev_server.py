@@ -3,17 +3,50 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import threading
+import time
+from datetime import datetime
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 ROOT_DIR = Path(__file__).resolve().parent
+DEBUG_DIR = ROOT_DIR / "debug"
 EDGE_DEBUG_SCRIPT = ROOT_DIR / "scripts" / "towerpower-edge-debug.ps1"
 CDP_CLICK_SCRIPT = ROOT_DIR / "scripts" / "towerpower-cdp-click.ps1"
 CDP_RUN_ACTION_SCRIPT = ROOT_DIR / "scripts" / "towerpower-cdp-run-action.ps1"
+CDP_CAPTURE_SCRIPT = ROOT_DIR / "scripts" / "towerpower-cdp-capture-pane.ps1"
+TEMPLATE_DETECTOR_SCRIPT = ROOT_DIR / "scripts" / "detect_template.py"
+GEM_TEMPLATE = ROOT_DIR / "templates" / "gem_button.png"
+DEFAULT_TEMPLATE_PYTHON = (
+    Path.home() / "old_local" / "local" / "tower_automation" / ".venv" / "bin" / "python"
+)
+PANE_VIEWPORTS = {
+    "pane-a": "pane-a-viewport",
+    "pane-b": "pane-b-viewport",
+}
+GEM_DETECTION_ENABLED = os.environ.get("GEM_DETECTION_ENABLED", "1") != "0"
+GEM_DETECTION_INTERVAL_MS = max(int(os.environ.get("GEM_DETECTION_INTERVAL_MS", "30000")), 1000)
+GEM_DETECTION_THRESHOLD = float(os.environ.get("GEM_DETECTION_THRESHOLD", "0.72"))
 LATEST_CAPTURE: dict[str, dict] = {}
+GEM_DETECTION_LOCK = threading.Lock()
+GEM_DETECTION_STATE: dict[str, object] = {
+    "ok": True,
+    "enabled": GEM_DETECTION_ENABLED,
+    "intervalMs": GEM_DETECTION_INTERVAL_MS,
+    "threshold": GEM_DETECTION_THRESHOLD,
+    "results": {},
+    "lastUpdatedAt": None,
+    "startedAt": datetime.now().isoformat(timespec="seconds"),
+}
+
+
+def now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
 
 
 def to_windows_path(path: Path) -> str:
@@ -35,9 +68,10 @@ def to_windows_path(path: Path) -> str:
 EDGE_DEBUG_SCRIPT_WIN = to_windows_path(EDGE_DEBUG_SCRIPT)
 CDP_CLICK_SCRIPT_WIN = to_windows_path(CDP_CLICK_SCRIPT)
 CDP_RUN_ACTION_SCRIPT_WIN = to_windows_path(CDP_RUN_ACTION_SCRIPT)
+CDP_CAPTURE_SCRIPT_WIN = to_windows_path(CDP_CAPTURE_SCRIPT)
 
 
-def should_retry_menubutton(stdout: str, stderr: str) -> bool:
+def should_retry_browser(stdout: str, stderr: str) -> bool:
     combined = f"{stdout}\n{stderr}"
     retry_markers = (
         "Could not find open Tower Power tab on Edge remote debugger",
@@ -45,8 +79,243 @@ def should_retry_menubutton(stdout: str, stderr: str) -> bool:
         "Failed to connect to the remote server",
         "actively refused",
         "No connection could be made",
+        "Connection refused",
     )
     return any(marker in combined for marker in retry_markers)
+
+
+def path_to_url(path: Path) -> str:
+    try:
+        relative = path.resolve().relative_to(ROOT_DIR)
+    except ValueError:
+        return str(path)
+    return f"/{relative.as_posix()}"
+
+
+def make_timestamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d-%H-%M-%S-%f")[:-3]
+
+
+def build_scale_list(base_scale: float) -> list[float]:
+    candidates = [
+        base_scale * 0.85,
+        base_scale * 0.925,
+        base_scale,
+        base_scale * 1.075,
+        base_scale * 1.15,
+        1.0,
+    ]
+    unique: list[float] = []
+    for value in candidates:
+        rounded = round(value, 3)
+        if rounded > 0.2 and rounded not in unique:
+            unique.append(rounded)
+    return sorted(unique)
+
+
+def resolve_template_python() -> str:
+    candidates = [
+        os.environ.get("TEMPLATE_PYTHON", "").strip(),
+        str(DEFAULT_TEMPLATE_PYTHON),
+        sys.executable,
+        "python3",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if Path(candidate).exists():
+            return candidate
+        if shutil.which(candidate):
+            return candidate
+    return "python3"
+
+
+def run_command(command: list[str], timeout: int = 90) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        cwd=ROOT_DIR,
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def ensure_edge_debug_window() -> None:
+    try:
+        run_command(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                EDGE_DEBUG_SCRIPT_WIN,
+                "-Mode",
+                "ensure",
+            ],
+            timeout=20,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def run_json_command(command: list[str], timeout: int = 90, retry_browser: bool = False) -> dict:
+    completed = run_command(command, timeout=timeout)
+    if completed.returncode != 0 and retry_browser and should_retry_browser(completed.stdout, completed.stderr):
+        ensure_edge_debug_window()
+        completed = run_command(command, timeout=timeout)
+
+    if completed.returncode != 0:
+        details = (completed.stderr or completed.stdout or "unknown error").strip()
+        raise RuntimeError(details or f"Command failed with exit code {completed.returncode}")
+
+    stdout = completed.stdout.strip()
+    if not stdout:
+        return {}
+
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Command returned invalid JSON: {stdout[:500]}") from exc
+
+
+def capture_pane_screenshot(pane: str, output_path: Path) -> dict:
+    viewport_id = PANE_VIEWPORTS[pane]
+    return run_json_command(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            CDP_CAPTURE_SCRIPT_WIN,
+            "-ViewportId",
+            viewport_id,
+            "-OutputPath",
+            to_windows_path(output_path),
+        ],
+        timeout=40,
+        retry_browser=True,
+    )
+
+
+def run_template_detector(screenshot_path: Path, annotated_path: Path, scales: list[float]) -> dict:
+    return run_json_command(
+        [
+            resolve_template_python(),
+            str(TEMPLATE_DETECTOR_SCRIPT),
+            "--screenshot",
+            str(screenshot_path),
+            "--template",
+            str(GEM_TEMPLATE),
+            "--annotated",
+            str(annotated_path),
+            "--threshold",
+            str(GEM_DETECTION_THRESHOLD),
+            "--scales",
+            ",".join(str(scale) for scale in scales),
+        ],
+        timeout=90,
+    )
+
+
+def detect_claim_button_for_pane(pane: str) -> dict:
+    checked_at = now_iso()
+    screenshot_path = DEBUG_DIR / f"{pane}-{make_timestamp()}.png"
+    annotated_path = DEBUG_DIR / f"{pane}-{make_timestamp()}-gem-detected.png"
+    DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+
+    result: dict[str, object] = {
+        "pane": pane,
+        "viewportId": PANE_VIEWPORTS[pane],
+        "checkedAt": checked_at,
+        "state": "not-found",
+        "found": False,
+        "error": None,
+    }
+
+    try:
+        capture_payload = capture_pane_screenshot(pane, screenshot_path)
+        stage_scale = float(capture_payload.get("stageScale") or 1.0)
+        detection_payload = run_template_detector(
+            screenshot_path,
+            annotated_path,
+            build_scale_list(stage_scale),
+        )
+
+        result.update(
+            {
+                "screenshot": str(screenshot_path),
+                "screenshotUrl": path_to_url(screenshot_path),
+                "annotated": str(annotated_path),
+                "annotatedUrl": path_to_url(annotated_path),
+                "lockedSize": {
+                    "width": capture_payload.get("lockedWidth"),
+                    "height": capture_payload.get("lockedHeight"),
+                },
+                "renderedSize": {
+                    "width": capture_payload.get("renderedWidth"),
+                    "height": capture_payload.get("renderedHeight"),
+                },
+                "stageScale": capture_payload.get("stageScale"),
+                "detection": detection_payload,
+            }
+        )
+
+        if detection_payload.get("found") and detection_payload.get("match"):
+            match = detection_payload["match"]
+            image = detection_payload.get("image") or {}
+            image_width = float(image.get("width") or 0)
+            image_height = float(image.get("height") or 0)
+            locked_width = float(capture_payload.get("lockedWidth") or 0)
+            locked_height = float(capture_payload.get("lockedHeight") or 0)
+            center_x, center_y = match["center"]
+            if image_width > 0 and image_height > 0 and locked_width > 0 and locked_height > 0:
+                result["wouldClickStagePoint"] = {
+                    "x": round((float(center_x) * locked_width) / image_width),
+                    "y": round((float(center_y) * locked_height) / image_height),
+                }
+            result["wouldClickImagePoint"] = {
+                "x": round(float(center_x)),
+                "y": round(float(center_y)),
+            }
+            result["found"] = True
+            result["state"] = "found"
+        else:
+            result["found"] = False
+            result["state"] = "not-found"
+    except Exception as exc:  # noqa: BLE001
+        result.update(
+            {
+                "found": False,
+                "state": "error",
+                "error": str(exc),
+                "screenshot": str(screenshot_path),
+                "screenshotUrl": path_to_url(screenshot_path),
+                "annotated": str(annotated_path),
+                "annotatedUrl": path_to_url(annotated_path),
+            }
+        )
+
+    return result
+
+
+def refresh_claim_detection() -> None:
+    if not GEM_DETECTION_ENABLED:
+        return
+
+    results = {pane: detect_claim_button_for_pane(pane) for pane in PANE_VIEWPORTS}
+    with GEM_DETECTION_LOCK:
+        GEM_DETECTION_STATE["results"] = results
+        GEM_DETECTION_STATE["lastUpdatedAt"] = now_iso()
+
+
+def claim_detection_loop(stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        refresh_claim_detection()
+        stop_event.wait(GEM_DETECTION_INTERVAL_MS / 1000)
 
 
 class NoCacheHandler(SimpleHTTPRequestHandler):
@@ -69,8 +338,22 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def do_GET(self) -> None:
-        if self.path.startswith("/__capture-stage-point"):
-            viewport_id = self.path.split("viewportId=", 1)[1] if "viewportId=" in self.path else ""
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+
+        if parsed.path == "/__gem-detection":
+            with GEM_DETECTION_LOCK:
+                state = json.loads(json.dumps(GEM_DETECTION_STATE))
+            pane = query.get("pane", [""])[0]
+            if pane in PANE_VIEWPORTS:
+                pane_result = (state.get("results") or {}).get(pane)
+                self.send_json(200, {"ok": True, "result": pane_result, "pane": pane})
+                return
+            self.send_json(200, state)
+            return
+
+        if parsed.path == "/__capture-stage-point":
+            viewport_id = query.get("viewportId", [""])[0]
             payload = LATEST_CAPTURE.get(viewport_id)
             self.send_json(200, {"ok": True, "capture": payload})
             return
@@ -94,6 +377,29 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
             self.send_json(200, {"ok": True})
             return
 
+        if self.path == "/__gem-detection/run-now":
+            pane = payload.get("pane")
+            if pane and pane not in PANE_VIEWPORTS:
+                self.send_json(400, {"ok": False, "error": "pane must be pane-a or pane-b"})
+                return
+            if pane:
+                result = detect_claim_button_for_pane(pane)
+                with GEM_DETECTION_LOCK:
+                    current_results = GEM_DETECTION_STATE.get("results")
+                    results: dict[str, object] = {}
+                    if isinstance(current_results, dict):
+                        results.update(current_results)
+                    results[pane] = result
+                    GEM_DETECTION_STATE["results"] = results
+                    GEM_DETECTION_STATE["lastUpdatedAt"] = now_iso()
+                self.send_json(200, {"ok": True, "result": result})
+                return
+            refresh_claim_detection()
+            with GEM_DETECTION_LOCK:
+                state = json.loads(json.dumps(GEM_DETECTION_STATE))
+            self.send_json(200, state)
+            return
+
         if self.path != "/__automation":
             self.send_error(404, "Not Found")
             return
@@ -107,14 +413,14 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
             self.send_json(400, {"ok": False, "error": "Expected pane-a|pane-b and action string"})
             return
 
-        if action == "menuButton":
+        if action in {"menuButton", "stagePoint"}:
             if not isinstance(viewport_id, str) or not isinstance(point, dict):
-                self.send_json(400, {"ok": False, "error": "menuButton requires viewportId and point"})
+                self.send_json(400, {"ok": False, "error": f"{action} requires viewportId and point"})
                 return
             x = point.get("x")
             y = point.get("y")
             if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
-                self.send_json(400, {"ok": False, "error": "menuButton requires numeric point.x and point.y"})
+                self.send_json(400, {"ok": False, "error": f"{action} requires numeric point.x and point.y"})
                 return
             command = [
                 "powershell.exe",
@@ -192,10 +498,10 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
                 check=False,
             )
 
-            if action == "menuButton" and completed.returncode != 0:
+            if action in {"menuButton", "stagePoint"} and completed.returncode != 0:
                 stdout = completed.stdout.strip()
                 stderr = completed.stderr.strip()
-                if should_retry_menubutton(stdout, stderr):
+                if should_retry_browser(stdout, stderr):
                     subprocess.run(
                         [
                             "powershell.exe",
@@ -249,17 +555,37 @@ def main() -> int:
     host = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("HOST", "127.0.0.1")
     port = int(sys.argv[2] if len(sys.argv) > 2 else os.environ.get("PORT", "8080"))
 
+    stop_event = threading.Event()
+    if GEM_DETECTION_ENABLED:
+        poller = threading.Thread(
+            target=claim_detection_loop,
+            args=(stop_event,),
+            name="tower-power-claim-detection",
+            daemon=True,
+        )
+        poller.start()
+    else:
+        poller = None
+
     handler = partial(NoCacheHandler, directory=str(ROOT_DIR))
     server = ThreadingHTTPServer((host, port), handler)
     server.allow_reuse_address = True
 
     print(f"Serving {ROOT_DIR} at http://{host}:{port}", flush=True)
+    if GEM_DETECTION_ENABLED:
+        print(
+            f"CLAIM detection polling enabled every {GEM_DETECTION_INTERVAL_MS}ms at threshold {GEM_DETECTION_THRESHOLD}",
+            flush=True,
+        )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        stop_event.set()
         server.server_close()
+        if poller is not None:
+            poller.join(timeout=1)
 
     return 0
 

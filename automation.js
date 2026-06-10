@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { spawnSync } = require("child_process");
 const { chromium } = require("playwright-core");
 
 const APP_URL = process.env.APP_URL || "http://127.0.0.1:8080/";
@@ -10,6 +12,36 @@ const BROWSER_CDP_URL = process.env.BROWSER_CDP_URL || "";
 const HEADLESS = process.env.HEADLESS === "1";
 const DEFAULT_VIEWPORT = { width: 1440, height: 900 };
 const STEP_DELAY_MS = Number(process.env.STEP_DELAY_MS || 800);
+const DEBUG_DIR = path.join(__dirname, "debug");
+const GEM_TEMPLATE_PATH =
+	process.env.GEM_TEMPLATE_PATH ||
+	path.join(__dirname, "templates", "gem_button.png");
+const TEMPLATE_DETECTOR_PATH = path.join(
+	__dirname,
+	"scripts",
+	"detect_template.py",
+);
+const CDP_CAPTURE_SCRIPT_PATH = path.join(
+	__dirname,
+	"scripts",
+	"towerpower-cdp-capture-pane.ps1",
+);
+const DEFAULT_DETECTION_THRESHOLD = Number(
+	process.env.DETECTION_THRESHOLD || 0.72,
+);
+const TEMPLATE_PYTHON_CANDIDATES = [
+	process.env.TEMPLATE_PYTHON || "",
+	path.join(
+		os.homedir(),
+		"old_local",
+		"local",
+		"tower_automation",
+		".venv",
+		"bin",
+		"python",
+	),
+	"python3",
+].filter(Boolean);
 
 const [command, ...args] = process.argv.slice(2);
 
@@ -28,6 +60,7 @@ Usage:
   npm run automate -- action <pane-a|pane-b> <menuButton|closeMenu|actions.NAME>
   npm run automate -- open-menu <pane-a|pane-b>
   npm run automate -- run-action <pane-a|pane-b> <actions.NAME>
+  npm run automate -- detect-gem [pane-a|pane-b|all] [--threshold 0.72]
 
 Environment:
   APP_URL=http://127.0.0.1:8080/
@@ -35,6 +68,8 @@ Environment:
   BROWSER_PROFILE_DIR=/path/to/chromium/profile
   BROWSER_CDP_URL=http://127.0.0.1:9222
   HEADLESS=1
+  GEM_TEMPLATE_PATH=/path/to/gem_button.png
+  DETECTION_THRESHOLD=0.72
 `);
 };
 
@@ -241,9 +276,234 @@ const runCapture = async (page, paneName) => {
 	await new Promise(() => {});
 };
 
+const makeTimestamp = () =>
+	new Date()
+		.toISOString()
+		.replace(/[:.]/g, "-")
+		.replace("T", "-")
+		.replace("Z", "");
+
+const ensureDebugDir = () => {
+	fs.mkdirSync(DEBUG_DIR, { recursive: true });
+	return DEBUG_DIR;
+};
+
+const parseThresholdOption = (rawArgs) => {
+	const argsCopy = [...rawArgs];
+	const index = argsCopy.indexOf("--threshold");
+	if (index === -1) {
+		return {
+			threshold: DEFAULT_DETECTION_THRESHOLD,
+			args: argsCopy,
+		};
+	}
+
+	const value = Number(argsCopy[index + 1]);
+	if (!Number.isFinite(value) || value <= 0 || value > 1) {
+		fail("--threshold must be a number > 0 and <= 1");
+	}
+	argsCopy.splice(index, 2);
+	return { threshold: value, args: argsCopy };
+};
+
+const toWindowsPath = (targetPath) => {
+	const completed = spawnSync("wslpath", ["-w", targetPath], {
+		encoding: "utf8",
+	});
+	if (completed.error || completed.status !== 0) {
+		fail(
+			`could not convert path for Windows tools: ${(completed.error?.message || completed.stderr || completed.stdout || targetPath).trim()}`,
+		);
+	}
+	return completed.stdout.trim();
+};
+
+const capturePaneScreenshotViaCDP = (paneName, screenshotPath) => {
+	const pane = resolvePane(paneName);
+	const completed = spawnSync(
+		"powershell.exe",
+		[
+			"-NoProfile",
+			"-ExecutionPolicy",
+			"Bypass",
+			"-File",
+			toWindowsPath(CDP_CAPTURE_SCRIPT_PATH),
+			"-ViewportId",
+			pane.viewportId,
+			"-OutputPath",
+			toWindowsPath(screenshotPath),
+		],
+		{ encoding: "utf8" },
+	);
+
+	if (completed.error) {
+		fail(`pane capture failed to start: ${completed.error.message}`);
+	}
+	if (completed.status !== 0) {
+		fail(
+			`pane capture failed: ${(completed.stderr || completed.stdout || "unknown error").trim()}`,
+		);
+	}
+
+	try {
+		return JSON.parse(completed.stdout.trim());
+	} catch (error) {
+		fail(`pane capture returned invalid JSON: ${error.message}`);
+	}
+};
+
+const buildScaleList = (baseScale) => {
+	const candidates = [
+		baseScale * 0.85,
+		baseScale * 0.925,
+		baseScale,
+		baseScale * 1.075,
+		baseScale * 1.15,
+		1,
+	]
+		.filter((value) => Number.isFinite(value) && value > 0.2)
+		.map((value) => Math.round(value * 1000) / 1000);
+	return [...new Set(candidates)].sort((a, b) => a - b);
+};
+
+const resolveTemplatePython = () => {
+	for (const candidate of TEMPLATE_PYTHON_CANDIDATES) {
+		if (candidate === "python3" || fs.existsSync(candidate)) {
+			return candidate;
+		}
+	}
+	return "python3";
+};
+
+const runTemplateDetector = ({
+	screenshotPath,
+	annotatedPath,
+	threshold,
+	scales,
+	templatePath,
+}) => {
+	const completed = spawnSync(
+		resolveTemplatePython(),
+		[
+			TEMPLATE_DETECTOR_PATH,
+			"--screenshot",
+			screenshotPath,
+			"--template",
+			templatePath,
+			"--annotated",
+			annotatedPath,
+			"--threshold",
+			String(threshold),
+			"--scales",
+			scales.join(","),
+		],
+		{ encoding: "utf8" },
+	);
+
+	if (completed.error) {
+		fail(`template detector failed to start: ${completed.error.message}`);
+	}
+	if (completed.status !== 0) {
+		fail(
+			`template detector failed: ${(completed.stderr || completed.stdout || "unknown error").trim()}`,
+		);
+	}
+
+	try {
+		return JSON.parse(completed.stdout.trim());
+	} catch (error) {
+		fail(`template detector returned invalid JSON: ${error.message}`);
+	}
+};
+
+const detectGemInPane = (paneName, threshold) => {
+	const pane = resolvePane(paneName);
+
+	if (!fs.existsSync(GEM_TEMPLATE_PATH)) {
+		fail(`gem template not found: ${GEM_TEMPLATE_PATH}`);
+	}
+
+	ensureDebugDir();
+	const timestamp = makeTimestamp();
+	const screenshotPath = path.join(DEBUG_DIR, `${paneName}-${timestamp}.png`);
+	const annotatedPath = path.join(
+		DEBUG_DIR,
+		`${paneName}-${timestamp}-gem-detected.png`,
+	);
+
+	const stageInfo = capturePaneScreenshotViaCDP(paneName, screenshotPath);
+	const detection = runTemplateDetector({
+		screenshotPath,
+		annotatedPath,
+		threshold,
+		scales: buildScaleList(stageInfo.stageScale),
+		templatePath: GEM_TEMPLATE_PATH,
+	});
+
+	const result = {
+		pane: paneName,
+		viewportId: pane.viewportId,
+		screenshot: screenshotPath,
+		annotated: annotatedPath,
+		lockedSize: {
+			width: stageInfo.lockedWidth,
+			height: stageInfo.lockedHeight,
+		},
+		renderedSize: {
+			width: stageInfo.renderedWidth,
+			height: stageInfo.renderedHeight,
+		},
+		threshold,
+		detection,
+	};
+
+	if (!detection.found || !detection.match) {
+		return result;
+	}
+
+	const [matchCenterX, matchCenterY] = detection.match.center;
+	const stagePoint = {
+		x: (matchCenterX * stageInfo.lockedWidth) / detection.image.width,
+		y: (matchCenterY * stageInfo.lockedHeight) / detection.image.height,
+	};
+
+	result.wouldClickStagePoint = {
+		x: Math.round(stagePoint.x),
+		y: Math.round(stagePoint.y),
+	};
+	result.wouldClickImagePoint = {
+		x: Math.round(matchCenterX),
+		y: Math.round(matchCenterY),
+	};
+
+	return result;
+};
+
+const runGemDetection = (paneArg, threshold) => {
+	const paneNames =
+		!paneArg || paneArg === "all" ? ["pane-a", "pane-b"] : [paneArg];
+	for (const paneName of paneNames) {
+		resolvePane(paneName);
+	}
+
+	const results = [];
+	for (const paneName of paneNames) {
+		results.push(detectGemInPane(paneName, threshold));
+	}
+
+	console.log(JSON.stringify({ ok: true, results }, null, 2));
+};
+
 const main = async () => {
 	if (!command || command === "--help" || command === "help") {
 		usage();
+		return;
+	}
+
+	if (command === "detect-gem") {
+		const { threshold, args: remainingArgs } = parseThresholdOption(args);
+		const paneArg = remainingArgs[0] || "all";
+		runGemDetection(paneArg, threshold);
 		return;
 	}
 
