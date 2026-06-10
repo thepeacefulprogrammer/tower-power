@@ -1,6 +1,10 @@
 param(
   [Parameter(Mandatory=$true)][string]$ViewportId,
-  [Parameter(Mandatory=$true)][string]$OutputPath
+  [Parameter(Mandatory=$true)][string]$OutputPath,
+  [int]$StageCenterX,
+  [int]$StageCenterY,
+  [int]$StageWidth,
+  [int]$StageHeight
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,6 +51,11 @@ function Receive-UntilId([int]$TargetId) {
   }
 }
 
+$stageCenterXJs = if ($PSBoundParameters.ContainsKey('StageCenterX')) { "$StageCenterX" } else { "null" }
+$stageCenterYJs = if ($PSBoundParameters.ContainsKey('StageCenterY')) { "$StageCenterY" } else { "null" }
+$stageWidthJs = if ($PSBoundParameters.ContainsKey('StageWidth')) { "$StageWidth" } else { "null" }
+$stageHeightJs = if ($PSBoundParameters.ContainsKey('StageHeight')) { "$StageHeight" } else { "null" }
+
 $expression = @"
 (() => {
   document.documentElement.setAttribute('data-cdp-capture', 'true');
@@ -57,16 +66,44 @@ $expression = @"
     return null;
   }
   const rect = stage.getBoundingClientRect();
+  const stageScale = debugPoint.scale;
+  const centerX = $stageCenterXJs;
+  const centerY = $stageCenterYJs;
+  const clipStageWidth = $stageWidthJs;
+  const clipStageHeight = $stageHeightJs;
+  let left = rect.left;
+  let top = rect.top;
+  let width = rect.width;
+  let height = rect.height;
+  if (
+    Number.isFinite(centerX) &&
+    Number.isFinite(centerY) &&
+    Number.isFinite(clipStageWidth) &&
+    Number.isFinite(clipStageHeight)
+  ) {
+    const centerPoint = window.TowerPowerDebug?.getPaneClientPoint('$ViewportId', { x: centerX, y: centerY });
+    if (!centerPoint) {
+      return null;
+    }
+    width = clipStageWidth * stageScale;
+    height = clipStageHeight * stageScale;
+    left = centerPoint.clientX - width / 2;
+    top = centerPoint.clientY - height / 2;
+  }
   return {
     viewportId: '$ViewportId',
-    left: rect.left,
-    top: rect.top,
-    width: rect.width,
-    height: rect.height,
+    left,
+    top,
+    width,
+    height,
     lockedWidth: debugPoint.lockedWidth,
     lockedHeight: debugPoint.lockedHeight,
-    stageScale: debugPoint.scale,
-    devicePixelRatio: window.devicePixelRatio || 1
+    stageScale,
+    devicePixelRatio: window.devicePixelRatio || 1,
+    clipStageCenterX: Number.isFinite(centerX) ? centerX : null,
+    clipStageCenterY: Number.isFinite(centerY) ? centerY : null,
+    clipStageWidth: Number.isFinite(clipStageWidth) ? clipStageWidth : null,
+    clipStageHeight: Number.isFinite(clipStageHeight) ? clipStageHeight : null
   };
 })()
 "@
@@ -122,6 +159,10 @@ $result = @{
   lockedHeight = $stage.lockedHeight
   stageScale = $stage.stageScale
   devicePixelRatio = $stage.devicePixelRatio
+  clipStageCenterX = $stage.clipStageCenterX
+  clipStageCenterY = $stage.clipStageCenterY
+  clipStageWidth = $stage.clipStageWidth
+  clipStageHeight = $stage.clipStageHeight
   debuggerPageId = $page.id
 }
 $result | ConvertTo-Json -Compress -Depth 20

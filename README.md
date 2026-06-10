@@ -109,7 +109,7 @@ By default it:
 - stops anything already listening on that port
 - starts the server in the background and returns control to your console
 - on WSL, opens the app in the same Windows Edge debug window used by pane automation
-- starts built-in CLAIM-button polling against that same signed-in Edge session
+- supports timer-based gem collection clicks from that same signed-in Edge session when enabled in the pane menu
 - serves files with no-cache headers for dev use
 - watches `config.js` from the browser and reapplies changes about once per second without requiring a page reload
 - on narrow/mobile screens, shows one pane at a time and lets you swipe left/right to switch panes
@@ -157,7 +157,7 @@ Notes:
 - `action` uses `AUTOMATION.paneA.actions.*` or `AUTOMATION.paneB.actions.*` from `config.js`.
 - `detect-gem` screenshots each pane stage, searches for `templates/gem_button.png`, and writes an annotated image in `debug/` with an X at the would-click location.
 - `detect-gem` accepts `pane-a`, `pane-b`, or `all` and an optional `--threshold 0.72` override.
-- `./dev.sh` also starts automatic CLAIM polling in the background. Each pane's hamburger menu now includes a **Collect gems** toggle; when enabled, the app clicks the detected gem button automatically.
+- each pane's hamburger menu includes a **Collect gems** toggle; when enabled, the frontend schedules timer-based clicks at `AUTOMATION.paneA.gemButtonCenter` / `AUTOMATION.paneB.gemButtonCenter` using a 15 minute baseline with ±1 minute timing jitter and small click dithering.
 - current-tab action sequences also need `closeMenu` for that pane.
 - startup sequences can click multiple items before close by using `actions: ["actions.resolution1080p", "actions.hidden"]`.
 - Set `BROWSER_PROFILE_DIR=/path/to/chromium-profile` if you want Playwright to launch its own Chromium-family browser profile.
@@ -172,7 +172,7 @@ Notes:
 - `config.js.example` — example config with placeholder device IDs, crop settings, and automation coordinate slots
 - `config.js` — your local device IDs and crop settings, ignored by git
 - `dev.sh` — starts the local dev server and, on WSL, opens the shared Edge debug window
-- `dev_server.py` — no-cache static server plus current-tab automation endpoints and background CLAIM polling
+- `dev_server.py` — no-cache static server plus current-tab automation endpoints and optional gem-detection helpers
 - `automation.js` — Playwright-based pane automation for capture, reveal, coordinate clicks, and one-off gem detection screenshots
 - `templates/gem_button.png` — template image used by `detect-gem` and background CLAIM polling
 - `scripts/detect_template.py` — screenshot template matcher that annotates the would-click point with an X

@@ -20,13 +20,13 @@ let swipeStart = null;
 
 const MOBILE_MEDIA_QUERY = "(max-width: 980px)";
 const SWIPE_THRESHOLD_PX = 50;
-const GEM_DETECTION_REFRESH_MS = 2000;
-const GEM_COLLECTION_STORAGE_KEY = "tower-power.collect-gems";
 const GEM_CLICK_DITHER_PX = 4;
+const GEM_COLLECTION_BASE_INTERVAL_MS = 15 * 60 * 1000;
+const GEM_COLLECTION_TIME_DITHER_MS = 60 * 1000;
 
 const gemCollectionEnabled = new Map();
 const gemClickInFlight = new Set();
-const gemLastAttemptSignature = new Map();
+const gemCollectionTimeouts = new Map();
 
 const buildPaneConfig = (config, prefix) => ({
 	deviceId: config[`${prefix}`],
@@ -137,39 +137,13 @@ const startCoordinateCapture = (viewportId) => {
 	syncCoordinateCaptureState();
 };
 
-const readCollectGemsPreferences = () => {
-	try {
-		const raw = window.localStorage.getItem(GEM_COLLECTION_STORAGE_KEY);
-		if (!raw) {
-			return {};
-		}
-		const parsed = JSON.parse(raw);
-		return parsed && typeof parsed === "object" ? parsed : {};
-	} catch (_error) {
-		return {};
-	}
-};
-
-const writeCollectGemsPreferences = (preferences) => {
-	try {
-		window.localStorage.setItem(
-			GEM_COLLECTION_STORAGE_KEY,
-			JSON.stringify(preferences),
-		);
-	} catch (_error) {
-		// ignore storage failures
-	}
-};
-
 const isCollectGemsEnabled = (paneName) => {
 	if (gemCollectionEnabled.has(paneName)) {
 		return gemCollectionEnabled.get(paneName) === true;
 	}
 
-	const preferences = readCollectGemsPreferences();
-	const enabled = preferences[paneName] !== false;
-	gemCollectionEnabled.set(paneName, enabled);
-	return enabled;
+	gemCollectionEnabled.set(paneName, false);
+	return false;
 };
 
 const syncCollectGemsToggle = (viewport) => {
@@ -182,26 +156,27 @@ const syncCollectGemsToggle = (viewport) => {
 	toggle.checked = isCollectGemsEnabled(paneName);
 };
 
-const setCollectGemsEnabled = (paneName, enabled) => {
-	const normalizedEnabled = Boolean(enabled);
-	gemCollectionEnabled.set(paneName, normalizedEnabled);
-	const preferences = readCollectGemsPreferences();
-	preferences[paneName] = normalizedEnabled;
-	writeCollectGemsPreferences(preferences);
-
-	for (const viewport of document.querySelectorAll(".pane-viewport")) {
-		if (viewport.dataset.pane === paneName) {
-			syncCollectGemsToggle(viewport);
-		}
+const clearGemCollectionTimer = (paneName) => {
+	const timeoutId = gemCollectionTimeouts.get(paneName);
+	if (timeoutId !== undefined) {
+		window.clearTimeout(timeoutId);
+		gemCollectionTimeouts.delete(paneName);
 	}
 };
 
-const buildGemAttemptSignature = (result) => {
-	const point = result?.wouldClickStagePoint;
-	if (!point) {
-		return "";
-	}
-	return `${result?.checkedAt || ""}:${Math.round(point.x)}:${Math.round(point.y)}`;
+const getGemCollectionViewport = (paneName) =>
+	document.getElementById(
+		paneName === "pane-a" ? "pane-a-viewport" : "pane-b-viewport",
+	);
+
+const getEnabledGemPanes = () =>
+	["pane-a", "pane-b"].filter((paneName) => isCollectGemsEnabled(paneName));
+
+const getGemCollectionDelayMs = () => {
+	const timeOffsetMs = Math.round(
+		(Math.random() * 2 - 1) * GEM_COLLECTION_TIME_DITHER_MS,
+	);
+	return Math.max(GEM_COLLECTION_BASE_INTERVAL_MS + timeOffsetMs, 1000);
 };
 
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
@@ -217,91 +192,77 @@ const ditherGemClickPoint = (viewport, point) => {
 	};
 };
 
-const maybeCollectGem = async (viewport, result) => {
-	const paneName = viewport.dataset.pane;
+const collectGemOnTimer = async (paneName) => {
+	const viewport = getGemCollectionViewport(paneName);
+	const point = getPaneAutomationPoint(paneName, "gemButtonCenter");
 	if (
-		!paneName ||
+		!viewport ||
+		!point ||
 		!isCollectGemsEnabled(paneName) ||
-		!result?.found ||
-		!result?.wouldClickStagePoint
-	) {
-		return;
-	}
-
-	const signature = buildGemAttemptSignature(result);
-	if (
-		!signature ||
-		gemClickInFlight.has(paneName) ||
-		gemLastAttemptSignature.get(paneName) === signature
+		document.visibilityState !== "visible" ||
+		gemClickInFlight.has(paneName)
 	) {
 		return;
 	}
 
 	gemClickInFlight.add(paneName);
-	gemLastAttemptSignature.set(paneName, signature);
 	try {
-		await runPaneStageClick(
-			viewport,
-			ditherGemClickPoint(viewport, result.wouldClickStagePoint),
-		);
+		await runPaneStageClick(viewport, ditherGemClickPoint(viewport, point));
 	} catch (error) {
-		gemLastAttemptSignature.delete(paneName);
 		console.error("[TowerPower gem collection]", error);
 	} finally {
 		gemClickInFlight.delete(paneName);
 	}
 };
 
-const applyGemDetectionResult = (result) => {
-	const paneName = result?.pane;
-	const viewportId =
-		paneName === "pane-a"
-			? "pane-a-viewport"
-			: paneName === "pane-b"
-				? "pane-b-viewport"
-				: null;
-	if (!viewportId) {
+const scheduleGemCollection = (
+	paneName,
+	delayMs = getGemCollectionDelayMs(),
+) => {
+	clearGemCollectionTimer(paneName);
+	if (!isCollectGemsEnabled(paneName)) {
 		return;
 	}
 
-	const viewport = document.getElementById(viewportId);
-	if (!viewport) {
-		return;
-	}
-
-	if (result?.state === "error") {
-		console.error("[TowerPower gem detection]", paneName, result?.error);
-		return;
-	}
-
-	void maybeCollectGem(viewport, result);
+	const timeoutId = window.setTimeout(async () => {
+		gemCollectionTimeouts.delete(paneName);
+		await collectGemOnTimer(paneName);
+		scheduleGemCollection(paneName);
+	}, delayMs);
+	gemCollectionTimeouts.set(paneName, timeoutId);
 };
 
-const refreshGemDetection = async () => {
-	try {
-		const response = await fetch(`/__gem-detection?t=${Date.now()}`, {
-			cache: "no-store",
-		});
-		if (!response.ok) {
-			throw new Error(`Gem detection status failed: ${response.status}`);
-		}
+const startGemCollection = async (paneName) => {
+	clearGemCollectionTimer(paneName);
+	if (!isCollectGemsEnabled(paneName)) {
+		return;
+	}
 
-		const payload = await response.json();
-		const results = payload?.results || {};
-		applyGemDetectionResult(results["pane-a"] || { pane: "pane-a" });
-		applyGemDetectionResult(results["pane-b"] || { pane: "pane-b" });
-	} catch (error) {
-		console.error("[TowerPower gem detection]", error);
-		applyGemDetectionResult({
-			pane: "pane-a",
-			state: "error",
-			error: error instanceof Error ? error.message : String(error),
-		});
-		applyGemDetectionResult({
-			pane: "pane-b",
-			state: "error",
-			error: error instanceof Error ? error.message : String(error),
-		});
+	await collectGemOnTimer(paneName);
+	scheduleGemCollection(paneName);
+};
+
+const primeEnabledGemCollection = () => {
+	for (const paneName of getEnabledGemPanes()) {
+		if (!gemCollectionTimeouts.has(paneName)) {
+			void startGemCollection(paneName);
+		}
+	}
+};
+
+const setCollectGemsEnabled = (paneName, enabled) => {
+	const normalizedEnabled = Boolean(enabled);
+	gemCollectionEnabled.set(paneName, normalizedEnabled);
+
+	for (const viewport of document.querySelectorAll(".pane-viewport")) {
+		if (viewport.dataset.pane === paneName) {
+			syncCollectGemsToggle(viewport);
+		}
+	}
+
+	clearGemCollectionTimer(paneName);
+	if (normalizedEnabled) {
+		void startGemCollection(paneName);
 	}
 };
 
@@ -353,6 +314,9 @@ const getPaneAutomationPoint = (paneName, action) => {
 	}
 	if (action === "closeMenu") {
 		return paneConfig.closeMenu || null;
+	}
+	if (action === "gemButtonCenter") {
+		return paneConfig.gemButtonCenter || null;
 	}
 	if (action.startsWith("actions.")) {
 		const actionName = action.slice("actions.".length);
@@ -866,11 +830,20 @@ document.addEventListener("keydown", (event) => {
 	}
 });
 
+document.addEventListener("visibilitychange", () => {
+	if (document.visibilityState === "visible") {
+		primeEnabledGemCollection();
+	}
+});
+
+window.addEventListener("focus", () => {
+	primeEnabledGemCollection();
+});
+
 wireMobileSwipeNavigation();
 applyConfig(window.TOWER_POWER_CONFIG || {});
 applyMobilePaneState();
 scheduleStartupAutomation(window.TOWER_POWER_CONFIG || {});
+primeEnabledGemCollection();
 refreshConfig();
-refreshGemDetection();
 window.setInterval(refreshConfig, 1000);
-window.setInterval(refreshGemDetection, GEM_DETECTION_REFRESH_MS);

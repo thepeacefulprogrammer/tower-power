@@ -13,6 +13,7 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+import struct
 
 ROOT_DIR = Path(__file__).resolve().parent
 DEBUG_DIR = ROOT_DIR / "debug"
@@ -161,6 +162,18 @@ def ensure_edge_debug_window() -> None:
         pass
 
 
+def read_png_size(path: Path) -> tuple[int, int]:
+    with path.open("rb") as handle:
+        header = handle.read(24)
+    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
+        raise RuntimeError(f"Unsupported PNG file: {path}")
+    width, height = struct.unpack(">II", header[16:24])
+    return int(width), int(height)
+
+
+GEM_TEMPLATE_WIDTH, GEM_TEMPLATE_HEIGHT = read_png_size(GEM_TEMPLATE)
+
+
 def run_json_command(command: list[str], timeout: int = 90, retry_browser: bool = False) -> dict:
     completed = run_command(command, timeout=timeout)
     if completed.returncode != 0 and retry_browser and should_retry_browser(completed.stdout, completed.stderr):
@@ -181,21 +194,40 @@ def run_json_command(command: list[str], timeout: int = 90, retry_browser: bool 
         raise RuntimeError(f"Command returned invalid JSON: {stdout[:500]}") from exc
 
 
-def capture_pane_screenshot(pane: str, output_path: Path) -> dict:
+def capture_pane_screenshot(
+    pane: str,
+    output_path: Path,
+    *,
+    center_point: dict[str, int] | None = None,
+) -> dict:
     viewport_id = PANE_VIEWPORTS[pane]
+    command = [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        CDP_CAPTURE_SCRIPT_WIN,
+        "-ViewportId",
+        viewport_id,
+        "-OutputPath",
+        to_windows_path(output_path),
+    ]
+    if center_point:
+        command.extend(
+            [
+                "-StageCenterX",
+                str(int(center_point["x"])),
+                "-StageCenterY",
+                str(int(center_point["y"])),
+                "-StageWidth",
+                str(GEM_TEMPLATE_WIDTH),
+                "-StageHeight",
+                str(GEM_TEMPLATE_HEIGHT),
+            ]
+        )
     return run_json_command(
-        [
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            CDP_CAPTURE_SCRIPT_WIN,
-            "-ViewportId",
-            viewport_id,
-            "-OutputPath",
-            to_windows_path(output_path),
-        ],
+        command,
         timeout=40,
         retry_browser=True,
     )
@@ -221,7 +253,17 @@ def run_template_detector(screenshot_path: Path, annotated_path: Path, scales: l
     )
 
 
-def detect_claim_button_for_pane(pane: str) -> dict:
+def normalize_stage_point(point: object) -> dict[str, int] | None:
+    if not isinstance(point, dict):
+        return None
+    x = point.get("x")
+    y = point.get("y")
+    if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+        return None
+    return {"x": int(round(x)), "y": int(round(y))}
+
+
+def detect_claim_button_for_pane(pane: str, center_point: dict[str, int] | None = None) -> dict:
     checked_at = now_iso()
     screenshot_path = DEBUG_DIR / f"{pane}-{make_timestamp()}.png"
     annotated_path = DEBUG_DIR / f"{pane}-{make_timestamp()}-gem-detected.png"
@@ -237,7 +279,11 @@ def detect_claim_button_for_pane(pane: str) -> dict:
     }
 
     try:
-        capture_payload = capture_pane_screenshot(pane, screenshot_path)
+        capture_payload = capture_pane_screenshot(
+            pane,
+            screenshot_path,
+            center_point=center_point,
+        )
         stage_scale = float(capture_payload.get("stageScale") or 1.0)
         detection_payload = run_template_detector(
             screenshot_path,
@@ -272,7 +318,12 @@ def detect_claim_button_for_pane(pane: str) -> dict:
             locked_width = float(capture_payload.get("lockedWidth") or 0)
             locked_height = float(capture_payload.get("lockedHeight") or 0)
             center_x, center_y = match["center"]
-            if image_width > 0 and image_height > 0 and locked_width > 0 and locked_height > 0:
+            if center_point:
+                result["wouldClickStagePoint"] = {
+                    "x": center_point["x"],
+                    "y": center_point["y"],
+                }
+            elif image_width > 0 and image_height > 0 and locked_width > 0 and locked_height > 0:
                 result["wouldClickStagePoint"] = {
                     "x": round((float(center_x) * locked_width) / image_width),
                     "y": round((float(center_y) * locked_height) / image_height),
@@ -310,12 +361,6 @@ def refresh_claim_detection() -> None:
     with GEM_DETECTION_LOCK:
         GEM_DETECTION_STATE["results"] = results
         GEM_DETECTION_STATE["lastUpdatedAt"] = now_iso()
-
-
-def claim_detection_loop(stop_event: threading.Event) -> None:
-    while not stop_event.is_set():
-        refresh_claim_detection()
-        stop_event.wait(GEM_DETECTION_INTERVAL_MS / 1000)
 
 
 class NoCacheHandler(SimpleHTTPRequestHandler):
@@ -382,8 +427,9 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
             if pane and pane not in PANE_VIEWPORTS:
                 self.send_json(400, {"ok": False, "error": "pane must be pane-a or pane-b"})
                 return
+            center_point = normalize_stage_point(payload.get("centerPoint"))
             if pane:
-                result = detect_claim_button_for_pane(pane)
+                result = detect_claim_button_for_pane(pane, center_point=center_point)
                 with GEM_DETECTION_LOCK:
                     current_results = GEM_DETECTION_STATE.get("results")
                     results: dict[str, object] = {}
@@ -555,18 +601,6 @@ def main() -> int:
     host = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("HOST", "127.0.0.1")
     port = int(sys.argv[2] if len(sys.argv) > 2 else os.environ.get("PORT", "8080"))
 
-    stop_event = threading.Event()
-    if GEM_DETECTION_ENABLED:
-        poller = threading.Thread(
-            target=claim_detection_loop,
-            args=(stop_event,),
-            name="tower-power-claim-detection",
-            daemon=True,
-        )
-        poller.start()
-    else:
-        poller = None
-
     handler = partial(NoCacheHandler, directory=str(ROOT_DIR))
     server = ThreadingHTTPServer((host, port), handler)
     server.allow_reuse_address = True
@@ -574,7 +608,7 @@ def main() -> int:
     print(f"Serving {ROOT_DIR} at http://{host}:{port}", flush=True)
     if GEM_DETECTION_ENABLED:
         print(
-            f"CLAIM detection polling enabled every {GEM_DETECTION_INTERVAL_MS}ms at threshold {GEM_DETECTION_THRESHOLD}",
+            f"CLAIM detection available on demand at threshold {GEM_DETECTION_THRESHOLD} (frontend requests checks for enabled panes)",
             flush=True,
         )
     try:
@@ -582,10 +616,7 @@ def main() -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        stop_event.set()
         server.server_close()
-        if poller is not None:
-            poller.join(timeout=1)
 
     return 0
 
