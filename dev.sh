@@ -109,4 +109,7 @@ echo "URL: $URL"
 echo "PID: $SERVER_PID"
 echo "Log: $LOG_FILE"
 echo "Collect gems now uses timer-based clicks from the frontend when enabled in the pane menu."
+if [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
+	echo "For phone/LAN access from Windows, run ./enable-phone-access.sh once and allow the admin prompt."
+fi
 echo "Edit config.js to update crop values live."

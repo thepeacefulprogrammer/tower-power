@@ -1,7 +1,10 @@
 config.js
+.remote-publish.env
 .dev-server.pid
 .dev-server.log
 node_modules/
 __pycache__/
 *.pyc
 debug/
+.remote-publish.pid
+.remote-publish.log

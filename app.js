@@ -19,6 +19,9 @@ let activeCoordinateCaptureViewportId = null;
 let swipeStart = null;
 
 const MOBILE_MEDIA_QUERY = "(max-width: 980px)";
+const CURRENT_TAB_AUTOMATION_ORIGIN = "http://127.0.0.1:8080";
+const MOBILE_LOCKED_STAGE_MIN_WIDTH_PX = 680;
+const MOBILE_LOCKED_STAGE_MIN_HEIGHT_PX = 720;
 const SWIPE_THRESHOLD_PX = 50;
 const GEM_CLICK_DITHER_PX = 4;
 const GEM_COLLECTION_BASE_INTERVAL_MS = 15 * 60 * 1000;
@@ -42,9 +45,11 @@ const ensureLockedPaneSize = (viewport) => {
 		return lockedPaneSizes.get(key);
 	}
 
+	const widthFloor = isMobileLayout() ? MOBILE_LOCKED_STAGE_MIN_WIDTH_PX : 1;
+	const heightFloor = isMobileLayout() ? MOBILE_LOCKED_STAGE_MIN_HEIGHT_PX : 1;
 	const size = {
-		width: Math.max(viewport.clientWidth, 1),
-		height: Math.max(viewport.clientHeight, 1),
+		width: Math.max(viewport.clientWidth, widthFloor),
+		height: Math.max(viewport.clientHeight, heightFloor),
 	};
 	lockedPaneSizes.set(key, size);
 	return size;
@@ -52,12 +57,18 @@ const ensureLockedPaneSize = (viewport) => {
 
 const getViewportScale = (viewport) => {
 	const lockedSize = ensureLockedPaneSize(viewport);
+	const cropTop = normalizeCrop(viewport.dataset.cropTop || "0");
 	const cropRight = normalizeCrop(viewport.dataset.cropRight || "0");
+	const cropBottom = normalizeCrop(viewport.dataset.cropBottom || "0");
 	const cropLeft = normalizeCrop(viewport.dataset.cropLeft || "0");
 
 	if (isMobileLayout()) {
 		const visibleWidth = Math.max(lockedSize.width - cropLeft - cropRight, 1);
-		return viewport.clientWidth / visibleWidth;
+		const visibleHeight = Math.max(lockedSize.height - cropTop - cropBottom, 1);
+		return Math.min(
+			viewport.clientWidth / visibleWidth,
+			viewport.clientHeight / visibleHeight,
+		);
 	}
 
 	return Math.min(
@@ -93,6 +104,15 @@ const closeAllPaneActionMenus = () => {
 };
 
 const isMobileLayout = () => window.matchMedia(MOBILE_MEDIA_QUERY).matches;
+
+const canUseCurrentTabAutomation = () =>
+	window.location.origin === CURRENT_TAB_AUTOMATION_ORIGIN;
+
+const applyAutomationCapabilityState = () => {
+	document.body.dataset.currentTabAutomation = String(
+		canUseCurrentTabAutomation(),
+	);
+};
 
 const syncCoordinateCaptureState = () => {
 	for (const viewport of document.querySelectorAll(".pane-viewport")) {
@@ -381,6 +401,12 @@ const updateRevealState = (viewport, cropLeft) => {
 };
 
 const runPaneAutomation = async (viewport, action, options = {}) => {
+	if (!canUseCurrentTabAutomation()) {
+		throw new Error(
+			`Current-tab automation only works from ${CURRENT_TAB_AUTOMATION_ORIGIN}/`,
+		);
+	}
+
 	const paneName = viewport.dataset.pane;
 	const primaryAction = Array.isArray(action) ? action[0] : action;
 	const response = await fetch("/__automation", {
@@ -750,7 +776,7 @@ let startupAutomationScheduled = false;
 const delay = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 const scheduleStartupAutomation = (config) => {
-	if (startupAutomationScheduled) {
+	if (startupAutomationScheduled || !canUseCurrentTabAutomation()) {
 		return;
 	}
 
@@ -840,6 +866,7 @@ window.addEventListener("focus", () => {
 	primeEnabledGemCollection();
 });
 
+applyAutomationCapabilityState();
 wireMobileSwipeNavigation();
 applyConfig(window.TOWER_POWER_CONFIG || {});
 applyMobilePaneState();

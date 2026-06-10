@@ -5,7 +5,7 @@ param(
   [Parameter(Mandatory=$true)][string]$ActionPointsJson,
   [Parameter(Mandatory=$true)][int]$CloseX,
   [Parameter(Mandatory=$true)][int]$CloseY,
-  [int]$StepDelayMs = 250
+  [int]$StepDelayMs = 500
 )
 
 $ErrorActionPreference = 'Stop'

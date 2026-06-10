@@ -119,9 +119,35 @@ Optional environment variables:
 ```bash
 PORT=9000 HOST=0.0.0.0 ./dev.sh
 NO_BROWSER=1 ./dev.sh
-GEM_DETECTION_INTERVAL_MS=10000 GEM_DETECTION_THRESHOLD=0.72 ./dev.sh
-GEM_DETECTION_ENABLED=0 ./dev.sh
 ```
+
+### Phone / LAN access from WSL on Windows
+
+If you want to open Tower Power from a phone on the same home network:
+
+1. Start the server bound to all interfaces:
+
+```bash
+HOST=0.0.0.0 ./dev.sh
+```
+
+2. In WSL, run the helper once and allow the Windows admin prompt:
+
+```bash
+./enable-phone-access.sh
+```
+
+That helper configures:
+- a Windows `portproxy` from LAN port `8080` to the current WSL IP
+- a Windows firewall allow rule for TCP `8080`
+
+After that, use one of the printed Windows LAN URLs from your phone, for example:
+
+```text
+http://192.168.x.x:8080
+```
+
+If your WSL IP changes after reboot, just run `./enable-phone-access.sh` again.
 
 Runtime files:
 
@@ -168,7 +194,7 @@ Notes:
 
 - `index.html` — two iframe panes only
 - `styles.css` — full-screen two-pane layout with fixed-size masked stages and pane action menus
-- `app.js` — loads the configured device IDs, locks pane size on first load, reapplies live mask offsets, triggers pane automation, polls built-in CLAIM detection, and exposes coordinate helpers for automation
+- `app.js` — loads the configured device IDs, locks pane size on first load, reapplies live mask offsets, triggers pane automation, schedules timer-based gem clicks, and exposes coordinate helpers for automation
 - `config.js.example` — example config with placeholder device IDs, crop settings, and automation coordinate slots
 - `config.js` — your local device IDs and crop settings, ignored by git
 - `dev.sh` — starts the local dev server and, on WSL, opens the shared Edge debug window
@@ -176,6 +202,10 @@ Notes:
 - `automation.js` — Playwright-based pane automation for capture, reveal, coordinate clicks, and one-off gem detection screenshots
 - `templates/gem_button.png` — template image used by `detect-gem` and background CLAIM polling
 - `scripts/detect_template.py` — screenshot template matcher that annotates the would-click point with an X
+- `enable-phone-access.sh` — configures Windows portproxy/firewall for phone access to WSL-hosted Tower Power
+- `scripts/publish-vm.sh` — opens an SSH reverse tunnel using values from local `.remote-publish.env`
+- `scripts/stop-publish-vm.sh` — stops the SSH reverse tunnel started by `publish-vm.sh`
+- `.remote-publish.env.example` — example local config for reverse-tunnel publishing, copied to ignored `.remote-publish.env`
 - `scripts/towerpower-edge-debug.ps1` — Windows Edge launcher/reuse script for the visible debug window
 - `scripts/towerpower-cdp-click.ps1` — Windows CDP click helper for single current-tab menu clicks
 - `scripts/towerpower-cdp-run-action.ps1` — Windows CDP helper for current-tab menu → one-or-more actions → close sequences

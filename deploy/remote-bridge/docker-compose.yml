@@ -1,0 +1,24 @@
+services:
+  tower-power-bridge:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ./nginx.default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./run:/run/tower-power
+    command: >-
+      /bin/sh -c "cp /etc/nginx/templates/default.conf.template /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.tower-power.rule=Host(`${PUBLIC_HOST}`)"
+      - "traefik.http.routers.tower-power.entrypoints=websecure"
+      - "traefik.http.routers.tower-power.tls=true"
+      - "traefik.http.routers.tower-power.tls.certresolver=letsencrypt"
+      - "traefik.http.services.tower-power.loadbalancer.server.port=80"
+    networks:
+      - default
+      - traefik-public
+
+networks:
+  traefik-public:
+    external: true
