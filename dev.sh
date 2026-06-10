@@ -3,14 +3,45 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT="${PORT:-8080}"
-HOST="${HOST:-127.0.0.1}"
-URL="http://${HOST}:${PORT}"
+PHONE_ACCESS="${PHONE_ACCESS:-0}"
+WSL_DEFAULT_LAN_ACCESS=0
+if [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
+	WSL_DEFAULT_LAN_ACCESS=1
+fi
+LAN_ACCESS="${LAN_ACCESS:-$PHONE_ACCESS}"
+if [[ "$LAN_ACCESS" == "0" && "$PHONE_ACCESS" == "0" && "$WSL_DEFAULT_LAN_ACCESS" == "1" ]]; then
+	LAN_ACCESS=1
+fi
+DISPLAY_HOST_EXPLICIT=0
+if [[ -n "${HOST+x}" ]]; then
+	HOST="$HOST"
+else
+	HOST="127.0.0.1"
+	if [[ "$LAN_ACCESS" == "1" ]]; then
+		HOST="0.0.0.0"
+	fi
+fi
+if [[ -n "${DISPLAY_HOST+x}" ]]; then
+	DISPLAY_HOST_EXPLICIT=1
+	DISPLAY_HOST="$DISPLAY_HOST"
+else
+	DISPLAY_HOST="$HOST"
+fi
+if [[ "$HOST" == "0.0.0.0" && "$DISPLAY_HOST_EXPLICIT" == "0" ]]; then
+	DISPLAY_HOST="127.0.0.1"
+fi
+URL="http://${DISPLAY_HOST}:${PORT}"
 PID_FILE="$ROOT_DIR/.dev-server.pid"
 LOG_FILE="$ROOT_DIR/.dev-server.log"
 CONFIG_JS_FILE="$ROOT_DIR/config.js"
 CONFIG_JS_EXAMPLE_FILE="$ROOT_DIR/config.js.example"
 SERVER_SCRIPT="$ROOT_DIR/dev_server.py"
 EDGE_DEBUG_SCRIPT="$ROOT_DIR/scripts/towerpower-edge-debug.ps1"
+REMOTE_PUBLISH_SCRIPT="$ROOT_DIR/scripts/publish-vm.sh"
+REMOTE_PUBLISH_ENV_FILE="${REMOTE_CONFIG_FILE:-$ROOT_DIR/.remote-publish.env}"
+AUTO_REMOTE_PUBLISH="${AUTO_REMOTE_PUBLISH:-1}"
+REMOTE_PUBLISH_REQUIRED="${REMOTE_PUBLISH_REQUIRED:-0}"
+NO_REMOTE_PUBLISH="${NO_REMOTE_PUBLISH:-0}"
 
 if ! command -v python3 >/dev/null 2>&1; then
 	echo "Error: python3 is required to serve this app." >&2
@@ -76,11 +107,44 @@ ensure_config_js() {
 	exit 0
 }
 
+start_remote_publish_if_configured() {
+	if [[ "$NO_REMOTE_PUBLISH" == "1" || "$AUTO_REMOTE_PUBLISH" == "0" ]]; then
+		echo "Remote publish: disabled"
+		return 0
+	fi
+
+	if [[ ! -x "$REMOTE_PUBLISH_SCRIPT" ]]; then
+		echo "Remote publish: skipped (missing $REMOTE_PUBLISH_SCRIPT)"
+		return 0
+	fi
+
+	if [[ ! -f "$REMOTE_PUBLISH_ENV_FILE" ]]; then
+		echo "Remote publish: skipped (missing $(basename "$REMOTE_PUBLISH_ENV_FILE"); copy .remote-publish.env.example if you want phone access through the VM)"
+		return 0
+	fi
+
+	echo "Starting remote publish tunnel..."
+	if "$REMOTE_PUBLISH_SCRIPT" --local-port "$PORT"; then
+		return 0
+	fi
+
+	if [[ "$REMOTE_PUBLISH_REQUIRED" == "1" ]]; then
+		echo "Error: remote publish failed and REMOTE_PUBLISH_REQUIRED=1" >&2
+		exit 1
+	fi
+
+	echo "Warning: remote publish failed; local dev server is still running." >&2
+}
+
 cd "$ROOT_DIR"
 ensure_config_js
 free_port
 
-echo "Starting Tower Power at ${URL}"
+if [[ "$HOST" == "$DISPLAY_HOST" ]]; then
+	echo "Starting Tower Power at ${URL}"
+else
+	echo "Starting Tower Power at ${URL} (bind ${HOST})"
+fi
 nohup python3 "$SERVER_SCRIPT" "$HOST" "$PORT" >"$LOG_FILE" 2>&1 &
 SERVER_PID=$!
 echo "$SERVER_PID" >"$PID_FILE"
@@ -104,12 +168,15 @@ if [[ "${NO_BROWSER:-0}" != "1" ]]; then
 	fi
 fi
 
+start_remote_publish_if_configured
+
 echo "Serving ${ROOT_DIR}"
 echo "URL: $URL"
+echo "Bind host: $HOST"
 echo "PID: $SERVER_PID"
 echo "Log: $LOG_FILE"
 echo "Collect gems now uses timer-based clicks from the frontend when enabled in the pane menu."
 if [[ -n "${WSL_DISTRO_NAME:-}" ]]; then
-	echo "For phone/LAN access from Windows, run ./enable-phone-access.sh once and allow the admin prompt."
+	echo "For direct Windows LAN access, run ./enable-phone-access.sh once and allow the admin prompt."
 fi
 echo "Edit config.js to update crop values live."

@@ -115,9 +115,14 @@ if [[ -f "$PID_FILE" ]]; then
 	if [[ "$old_pid" =~ ^[0-9]+$ ]] && kill -0 "$old_pid" 2>/dev/null; then
 		echo "Stopping existing remote publish tunnel PID $old_pid"
 		kill "$old_pid" 2>/dev/null || true
-		rm -f "$PID_FILE"
+	else
+		echo "Removing stale remote publish PID file ($old_pid)"
 	fi
+	rm -f "$PID_FILE"
 fi
+
+remote_socket_dir=$(dirname "$REMOTE_SOCKET")
+ssh -i "$SSH_KEY" -o BatchMode=yes "$DEPLOY_HOST" "mkdir -p '$remote_socket_dir' && rm -f '$REMOTE_SOCKET'" >/dev/null
 
 SSH_OPTS=(
 	-i "$SSH_KEY"

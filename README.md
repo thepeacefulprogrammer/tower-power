@@ -108,6 +108,8 @@ By default it:
 - serves the app at `http://127.0.0.1:8080`
 - stops anything already listening on that port
 - starts the server in the background and returns control to your console
+- on WSL, binds the server to `0.0.0.0` so the auto-opened Windows Edge window can reach it while still printing `127.0.0.1` as the local URL
+- if `.remote-publish.env` exists, also starts the SSH reverse-tunnel publish helper so the current dev server is reachable from your phone through the remote VM hostname
 - on WSL, opens the app in the same Windows Edge debug window used by pane automation
 - supports timer-based gem collection clicks from that same signed-in Edge session when enabled in the pane menu
 - serves files with no-cache headers for dev use
@@ -118,8 +120,17 @@ Optional environment variables:
 
 ```bash
 PORT=9000 HOST=0.0.0.0 ./dev.sh
+PHONE_ACCESS=1 ./dev.sh
 NO_BROWSER=1 ./dev.sh
+NO_REMOTE_PUBLISH=1 ./dev.sh
+REMOTE_PUBLISH_REQUIRED=1 ./dev.sh
 ```
+
+On WSL this `0.0.0.0` binding now happens automatically by default so Windows Edge can reach the app after `./dev.sh` launches it.
+
+`PHONE_ACCESS=1` (or `LAN_ACCESS=1`) still forces `./dev.sh` to bind the server to `0.0.0.0` for phone/LAN access while still printing/opening `127.0.0.1` locally.
+`NO_REMOTE_PUBLISH=1` skips the VM tunnel even if `.remote-publish.env` exists.
+`REMOTE_PUBLISH_REQUIRED=1` makes `./dev.sh` fail if the remote tunnel cannot be started.
 
 ### Phone / LAN access from WSL on Windows
 
@@ -128,8 +139,10 @@ If you want to open Tower Power from a phone on the same home network:
 1. Start the server bound to all interfaces:
 
 ```bash
-HOST=0.0.0.0 ./dev.sh
+PHONE_ACCESS=1 ./dev.sh
 ```
+
+You can still use `HOST=0.0.0.0 ./dev.sh` directly if you prefer.
 
 2. In WSL, run the helper once and allow the Windows admin prompt:
 
@@ -197,7 +210,7 @@ Notes:
 - `app.js` — loads the configured device IDs, locks pane size on first load, reapplies live mask offsets, triggers pane automation, schedules timer-based gem clicks, and exposes coordinate helpers for automation
 - `config.js.example` — example config with placeholder device IDs, crop settings, and automation coordinate slots
 - `config.js` — your local device IDs and crop settings, ignored by git
-- `dev.sh` — starts the local dev server and, on WSL, opens the shared Edge debug window
+- `dev.sh` — starts the local dev server, auto-starts remote publish when `.remote-publish.env` exists, and on WSL opens the shared Edge debug window
 - `dev_server.py` — no-cache static server plus current-tab automation endpoints and optional gem-detection helpers
 - `automation.js` — Playwright-based pane automation for capture, reveal, coordinate clicks, and one-off gem detection screenshots
 - `templates/gem_button.png` — template image used by `detect-gem` and background CLAIM polling
